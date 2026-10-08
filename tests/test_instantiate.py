@@ -1,94 +1,55 @@
-# this file is part of mkchromecast.
-
+import tempfile
 import unittest
-from unittest import mock
-
-import mkchromecast
-from mkchromecast import _arg_parsing
-from mkchromecast import config
-from mkchromecast import constants
-
-class BasicInstantiationTest(unittest.TestCase):
-    def testInstantiate(self):
-        # TODO(xsdg): Do a better job of mocking the args parser.
-
-        mock_args = mock.Mock()
-        # Here we set the minimal required args for __init__ to not sys.exit.
-        mock_args.encoder_backend = None
-        mock_args.bitrate = constants.DEFAULT_BITRATE
-        mock_args.codec = 'mp3'
-        mock_args.command = None
-        mock_args.resolution = None
-        mock_args.chunk_size = 64
-        mock_args.sample_rate = 44100
-        mock_args.youtube = None
-        mock_args.input_file = None
-        mkcc = mkchromecast.Mkchromecast(mock_args)
-
-    def testMP3CodecNodeBackend(self):
-        """This test evaluates the assignment of the MP3 codec when the Node Backend is selected"""
-
-        mock_args = mock.Mock()
-        # Here we set the minimal required args for __init__ to not sys.exit.
-        mock_args.encoder_backend = 'node'
-        mock_args.bitrate = constants.DEFAULT_BITRATE
-        mock_args.codec = 'mp3'
-        mock_args.command = None
-        mock_args.resolution = None
-        mock_args.chunk_size = 64
-        mock_args.sample_rate = 44100
-        mock_args.youtube = None
-        mock_args.input_file = None
-        mkcc = mkchromecast.Mkchromecast(mock_args)
-
-    def testTrayModeInstantiation(self):
-        mock_config = mock.create_autospec(config.Config, spec_set=True)
-        self.enterContext(mock.patch.object(config, "Config", return_value=mock_config))
-
-        mock_args = mock.Mock()
-        # Here we set the minimal required args for __init__ to not sys.exit.
-        mock_args.encoder_backend = None
-        mock_args.bitrate = constants.DEFAULT_BITRATE
-        mock_args.codec = 'mp3'
-        mock_args.command = None
-        mock_args.resolution = None
-        mock_args.chunk_size = 64
-        mock_args.sample_rate = 44100
-        mock_args.youtube = None
-        mock_args.input_file = None
-
-        # Now, we set the args to trigger tray mode.
-        mock_args.discover = False
-        mock_args.input_file = None
-        mock_args.reset = False
-        mock_args.screencast = False
-        mock_args.source_url = None
-        mock_args.tray = True
-
-        # Setting the mock config contents.
-        mock_config.backend = "backend"
-        mock_config.codec = "codec"
-        mock_config.bitrate = 12345
-        mock_config.samplerate = 54321
-        mock_config.notifications = True
-        mock_config.colors = "colors"
-        mock_config.search_at_launch = False
-        mock_config.alsa_device = "alsa_device"
-
-        mkcc = mkchromecast.Mkchromecast(mock_args)
-
-        # We should find that the mock config values are returned by mkcc, even
-        # when they are defined differently in args (for instance, bitrate,
-        # codec, and samplerate above)
-        self.assertEqual(mkcc.backend, "backend")
-        self.assertEqual(mkcc.codec, "codec")
-        self.assertEqual(mkcc.bitrate, 12345)
-        self.assertEqual(mkcc.samplerate, 54321)
-        self.assertEqual(mkcc.notifications, True)
-        self.assertEqual(mkcc.colors, "colors")
-        self.assertEqual(mkcc.search_at_launch, False)
-        self.assertEqual(mkcc.adevice, "alsa_device")
+from unittest.mock import patch
+from mkchromecast import Mkchromecast, _arg_parsing
+from mkchromecast.constants import OpMode
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+class SettingsTests(unittest.TestCase):
+    def make(self, *argv):
+        with patch('platform.system', return_value='Linux'):
+            return Mkchromecast(_arg_parsing.Parser.parse_args(argv))
+
+    def test_defaults(self):
+        settings = self.make()
+        self.assertEqual(OpMode.AUDIOCAST, settings.operation)
+        self.assertEqual('parec', settings.backend)
+        self.assertEqual(5000, settings.port)
+
+    def test_node_requires_mp3(self):
+        with patch('platform.system', return_value='Darwin'):
+            settings = Mkchromecast(_arg_parsing.Parser.parse_args(['--encoder-backend', 'node', '-c', 'opus']))
+        self.assertEqual('mp3', settings.codec)
+
+    def test_tray_reads_real_configuration(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'XDG_CONFIG_HOME': directory}):
+            from mkchromecast.config import Config
+            with Config('Linux') as conf:
+                conf.backend = 'ffmpeg'
+                conf.bitrate = 256
+            settings = self.make('--tray')
+            self.assertEqual(256, settings.bitrate)
+            self.assertEqual('ffmpeg', settings.backend)
+
+    def test_invalid_parameters(self):
+        for argv in (['--port', '0'], ['--fps', 'nan'], ['--discovery-timeout', 'inf'],
+                     ['--startup-timeout', '-1'], ['--screencast'], ['--segment-time', '2'],
+                     ['--source-url', 'not-a-url'], ['--receiver', 'sonos', '--video'],
+                     ['--video'], ['--tries', '0'], ['--mtype', 'audio/aac']):
+            with self.subTest(argv=argv), self.assertRaises(ValueError):
+                self.make(*argv)
+
+    def test_ytdlp_accepts_short_url(self):
+        settings = self.make('-y', 'https://youtu.be/abc')
+        self.assertEqual(OpMode.YOUTUBE, settings.operation)
+        self.assertEqual('ffmpeg', settings.backend)
+
+    def test_custom_command_preserves_quoted_arguments(self):
+        settings = self.make('--video', '--command', 'ffmpeg -i "my movie.mp4" -f mp4 pipe:1')
+        self.assertIn('my movie.mp4', settings.command)
+        self.assertEqual(OpMode.INPUT_FILE, settings.operation)
+        with self.assertRaises(ValueError):
+            self.make('--video', '--command', 'echo unsafe')
+
+    def test_resolution_normalized(self):
+        self.assertEqual('720p', self.make('--resolution', '720P').resolution)

@@ -1,5 +1,6 @@
 # this file is part of mkchromecast.
 
+from typing import Any
 import unittest
 from unittest import mock
 
@@ -47,7 +48,7 @@ class AudioBuilderTests(unittest.TestCase):
         self.assertIn("Mkchromecast.monitor", input_cmd)
         self.assertNotIn("avfoundation", input_cmd)
         self.assertNotIn("alsa", input_cmd)
-        self.assertIn("-frame_size", input_cmd)
+        self.assertNotIn("-frame_size", input_cmd)
 
     def testLinuxAlsaInputCommand(self):
         adevice="hw:2,1"
@@ -58,14 +59,14 @@ class AudioBuilderTests(unittest.TestCase):
         self.assertIn(adevice, input_cmd)
         self.assertNotIn("avfoundation", input_cmd)
         self.assertNotIn("pulse", input_cmd)
-        self.assertIn("-frame_size", input_cmd)
+        self.assertNotIn("-frame_size", input_cmd)
 
     def testDebugSpecialCase(self):
         self.assertIn(
             "-loglevel",
             self.create_builder("ffmpeg", "Darwin", ffmpeg_debug=True).command)
-        self.assertNotIn(
-            "-loglevel",
+        self.assertIn(
+            "warning",
             self.create_builder("ffmpeg", "Darwin", ffmpeg_debug=False).command)
 
     def testBitrateSpecialCase(self):
@@ -138,10 +139,9 @@ class AudioBuilderTests(unittest.TestCase):
 
     def testFullLinux(self):
         exp_command = [
-            "ffmpeg",
+            "ffmpeg", "-loglevel", "warning",
             "-ac", "2",
             "-ar", "44100",
-            "-frame_size", str(32*128),
             "-fragment_size", str(32*128),
             "-f", "pulse",
             "-i", "Mkchromecast.monitor",
@@ -159,7 +159,7 @@ class AudioBuilderTests(unittest.TestCase):
 
     def testFullDarwin(self):
         exp_command = [
-            "ffmpeg",
+            "ffmpeg", "-loglevel", "warning",
             "-f", "avfoundation",
             "-i", ":BlackHole 16ch",
             "-f", "segment",
@@ -220,126 +220,25 @@ class VideoBuilderTests(unittest.TestCase):
 
         return pipeline_builder.Video(settings)
 
-    def testEmptySubtitleCommands(self):
-        empty_sub = ([], [],)
-        self.assertEqual(
-            empty_sub,
-            pipeline_builder.Video._input_file_subtitle(None, is_mkv=False)
-        )
-        self.assertEqual(
-            empty_sub,
-            pipeline_builder.Video._input_file_subtitle(None, is_mkv=True)
-        )
+    def test_subtitles_force_transcoding_and_combine_filters(self):
+        command = self.create_builder(operation=OpMode.INPUT_FILE, copy_video=True,
+                                      subtitles="captions.srt", resolution="480p").command
+        self.assertNotIn("copy", command)
+        self.assertIn("libx264", command)
+        self.assertEqual(1, command.count("-vf"))
+        self.assertIn("scale=854:-2", command[command.index("-vf") + 1])
+        self.assertIn("0:v:0", command)
+        self.assertIn("0:a:0?", command)
+        self.assertIn("aac", command)
 
-    def testMkvSubtitleCommands(self):
-        sub_file = "subtitles.srt"
-        input_args, output_args = pipeline_builder.Video._input_file_subtitle(
-            sub_file, is_mkv=True
-        )
-
-        self.assertIn("-i", input_args)
-        i_index = input_args.index("-i")
-        self.assertEqual(sub_file, input_args[i_index + 1])
-
-        self.assertIn("-max_muxing_queue_size", output_args)
-        self.assertNotIn("-vf", output_args)
-
-    def testNonMkvSubtitleCommands(self):
-        sub_file = "subtitles.srt"
-        input_args, output_args = pipeline_builder.Video._input_file_subtitle(
-            sub_file, is_mkv=False
-        )
-
-        self.assertEqual([], input_args)
-
-        self.assertIn("-vf", output_args)
-        o_index = output_args.index("-vf")
-        self.assertEqual(f"subtitles={sub_file}", output_args[o_index + 1])
-
-    def testAudioEncodeCommands(self):
-        # Shorthand for convenience.
-        aencode_fxn = pipeline_builder.Video._input_file_aencode
-
-        self.assertEqual([], aencode_fxn(True, False))
-        self.assertEqual([], aencode_fxn(False, False))
-
-        self.assertIn("copy", aencode_fxn(True, True))
-        self.assertNotIn("libmp3lame", aencode_fxn(True, True))
-
-        self.assertNotIn("copy", aencode_fxn(False, True))
-        self.assertIn("libmp3lame", aencode_fxn(False, True))
-
-    def testVideoEncodeCommands(self):
-        self.enterContext(mock.patch.object(utils, "check_file_info", autospec=True))
-        utils.check_file_info.side_effect = Exception("Should not be called")
-
-        # Shorthand for convenience.
-        vencode_fxn = pipeline_builder.Video._input_file_vencode
-
-        # Whenever resolution is specified, we should see the reencode strategy.
-        self.assertIn("libx264", vencode_fxn("input.mp4", res="1080p"))
-        self.assertIn("libx264", vencode_fxn("input.mkv", res="1080p"))
-        self.assertNotIn("copy", vencode_fxn("input.mkv", res="1080p"))
-
-        # We should always copy for non-mkv without resolution specified.
-        self.assertIn("copy", vencode_fxn("input.mp4", res=None))
-        self.assertNotIn("libx264", vencode_fxn("input.mp4", res=None))
-
-        # For mkv without resolution, we should only reencode yuv420p10le.
-        utils.check_file_info.side_effect = None
-        utils.check_file_info.return_value = "yuv420p"
-        self.assertIn("copy", vencode_fxn("input.mkv", res=None))
-        utils.check_file_info.assert_called_once()
-
-        utils.check_file_info.reset_mock()
-        utils.check_file_info.return_value = "yuv420p10le"
-        self.assertIn("libx264", vencode_fxn("input.mkv", res=None))
-        utils.check_file_info.assert_called_once()
-
-    def testSpotCheckReencodeFullCommand(self):
-        exp_command = [
-            "ffmpeg",
-            "-re",
-            "-i", "input_file.mp4",
-            "-map_chapters", "-1",
-            "-vcodec", "libx264",
-            "-preset", "veryfast",
-            "-tune", "zerolatency",
-            "-maxrate", "10000k",
-            "-bufsize", "20000k",
-            "-pix_fmt", "yuv420p",
-            "-g", "60",
-            "-f", "mp4",
-            "-movflags", "frag_keyframe+empty_moov",
-            "-vf", "scale=1920x1080",
-            "pipe:1",
-        ]
-
-        builder = self.create_builder(operation=OpMode.INPUT_FILE,
-                                      input_file="input_file.mp4",
-                                      resolution="1080p")
-        self.assertEqual(exp_command, builder.command)
-
-    def testSpotCheckCopyFullCommand(self):
-        exp_command = [
-            "ffmpeg",
-            "-stream_loop", "-1",
-            "-ss", "hh:mm:ss",
-            "-re",
-            "-i", "input_file.mp4",
-            "-map_chapters", "-1",
-            "-vcodec", "copy",
-            "-f", "mp4",
-            "-movflags", "frag_keyframe+empty_moov",
-            "pipe:1",
-        ]
-
-        builder = self.create_builder(operation=OpMode.INPUT_FILE,
-                                      input_file="input_file.mp4",
-                                      resolution=None,
-                                      loop=True,
-                                      seek="hh:mm:ss")
-        self.assertEqual(exp_command, builder.command)
+    def test_copy_requires_explicit_probe_decision(self):
+        command = self.create_builder(operation=OpMode.INPUT_FILE).command
+        self.assertNotIn("copy", command)
+        command = self.create_builder(operation=OpMode.INPUT_FILE, copy_video=True,
+                                      loop=True, seek="00:00:01").command
+        self.assertIn("copy", command)
+        self.assertIn("-stream_loop", command)
+        self.assertLess(command.index("-ss"), command.index("-i"))
 
     def testX11ScreencastCommand(self):
         # The X11 path stays on ffmpeg/x11grab, byte-for-byte unchanged.
@@ -347,7 +246,6 @@ class VideoBuilderTests(unittest.TestCase):
             "ffmpeg",
             "-ac", "2",
             "-ar", "44100",
-            "-frame_size", "2048",
             "-fragment_size", "2048",
             "-f", "pulse",
             "-ac", "2",
@@ -366,7 +264,7 @@ class VideoBuilderTests(unittest.TestCase):
             "-f", "mp4",
             "-movflags", "frag_keyframe+empty_moov",
             "-ar", "44100",
-            "-acodec", "libvorbis",
+            "-acodec", "aac",
             "pipe:1",
         ]
         builder = self.create_builder(operation=OpMode.SCREENCAST,

@@ -1,145 +1,60 @@
-# This file is part of mkchromecast.
+"""Explicit audio setup; importing this module has no runtime side effects."""
+from functools import partial
 
-"""
-Google Cast device has to point out to http://ip:5000/stream
-"""
-
-import os
-import re
-import shutil
-from typing import Union
-
-import mkchromecast
-from mkchromecast import colors
-from mkchromecast import constants
-from mkchromecast import pipeline_builder
-from mkchromecast import stream_infra
-from mkchromecast import utils
+from mkchromecast import Mkchromecast, constants, pipeline_builder, stream_infra, utils
 from mkchromecast.constants import OpMode
-import mkchromecast.messages as msg
+from mkchromecast.media import AUDIO_TYPES, youtube_commands
 
 
-backend = stream_infra.BackendInfo()
-
-# TODO(xsdg): Encapsulate this so that we don't do this work on import.
-_mkcc = mkchromecast.Mkchromecast()
-command: Union[str, list[str]]
-media_type: str
-
-# We make local copies of these attributes because they are sometimes modified.
-# TODO(xsdg): clean this up more when we refactor this file.
-host = _mkcc.host
-port = _mkcc.port
-platform = _mkcc.platform
-
-ip = utils.get_effective_ip(platform, host_override=host, fallback_ip="0.0.0.0")
-
-frame_size = 32 * _mkcc.chunk_size
-buffer_size = 2 * _mkcc.chunk_size**2
-
-encode_settings = pipeline_builder.EncodeSettings(
-        codec=_mkcc.codec,
-        adevice=_mkcc.adevice,
-        bitrate=_mkcc.bitrate,
-        frame_size=frame_size,
-        samplerate=str(_mkcc.samplerate),
-        segment_time=_mkcc.segment_time
+def _flask_init(settings):
+    backend = stream_infra.BackendInfo(settings.backend, settings.backend)
+    sample_rate = 48000 if settings.codec == "opus" else utils.quantize_sample_rate(settings.codec, settings.samplerate)
+    encode = pipeline_builder.EncodeSettings(
+        codec=settings.codec, adevice=settings.adevice,
+        bitrate=utils.clamp_bitrate(settings.codec, settings.bitrate),
+        frame_size=32 * settings.chunk_size, samplerate=str(sample_rate),
+        segment_time=None, ffmpeg_debug=settings.debug,
     )
-
-debug = _mkcc.debug
-
-if debug is True:
-    print(
-        ":::audio::: chunk_size, frame_size, buffer_size: %s, %s, %s"
-        % (_mkcc.chunk_size, frame_size, buffer_size)
-    )
-
-# This is to take the youtube URL
-if _mkcc.operation == OpMode.YOUTUBE:
-    print(colors.options("The Youtube URL chosen: ") + _mkcc.youtube_url)
-
-    try:
-        import urlparse
-
-        url_data = urlparse.urlparse(_mkcc.youtube_url)
-        query = urlparse.parse_qs(url_data.query)
-    except ImportError:
-        import urllib.parse
-
-        url_data = urllib.parse.urlparse(_mkcc.youtube_url)
-        query = urllib.parse.parse_qs(url_data.query)
-    video = query["v"][0]
-    print(colors.options("Playing video:") + " " + video)
-    command = ["yt-dlp", "-o", "-", _mkcc.youtube_url]
-    media_type = "audio/mp4"
-else:
-    backend.name = _mkcc.backend
-    backend.path = backend.name    
-
-    # TODO(xsdg): Why is this only run in tray mode???
-    if _mkcc.operation == OpMode.TRAY and backend.name in {"ffmpeg", "parec"}:
-        import os
-        import getpass
-
-        # TODO(xsdg): We should not be setting up a custom path like this.  We
-        # should be respecting the path that the user has set, and requiring
-        # them to specify an absolute path if the backend isn't in their PATH.
-        username = getpass.getuser()
-        backend_search_path = (
-            f"./bin:./nodejs/bin:/Users/{username}/bin:/usr/local/bin:"
-            "/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin:"
-            f"/usr/X11/bin:/usr/games:{os.environ['PATH']}"
-        )
-
-        backend.path = shutil.which(backend.name, path=backend_search_path)
-        if debug:
-            print(f"Searched for {backend.name} in PATH {backend_search_path}")
-            print(f"Resolved to {repr(backend.path)}")
-
-    if encode_settings.codec == "mp3":
-        media_type = "audio/mpeg"
+    producer = None
+    media_type = AUDIO_TYPES[settings.codec]
+    if settings.operation == OpMode.YOUTUBE:
+        producer, command = youtube_commands(settings)
+        media_type = "video/mp4" if settings.videoarg else "audio/mpeg"
+    elif settings.operation == OpMode.INPUT_FILE:
+        fmt = "adts" if settings.codec == "aac" else settings.codec
+        command = ["ffmpeg", "-nostdin", "-loglevel", "warning",
+                   *(["-stream_loop", "-1"] if settings.loop else []),
+                   *(["-ss", settings.seek] if settings.seek else []),
+                   "-re", "-i", settings.input_file, "-map", "0:a:0", "-vn",
+                   "-c:a", pipeline_builder.Audio._ffmpeg_fmt_to_acodec[fmt],
+                   "-ac", "2", "-ar", str(sample_rate),
+                   *(["-b:a", f"{encode.bitrate}k"] if settings.codec in constants.CODECS_WITH_BITRATE else []),
+                   "-f", fmt, "pipe:1"]
     else:
-        media_type = f"audio/{encode_settings.codec}"
-
-    print(colors.options("Selected backend:") + f" {backend}")
-    print(colors.options("Selected audio codec:") + f" {encode_settings.codec}")
-
-    if backend.name != "node":
-        encode_settings.bitrate = utils.clamp_bitrate(encode_settings.codec,
-                                                      encode_settings.bitrate)
-
-        if encode_settings.bitrate != "None":
-            print(colors.options("Using bitrate:") + f" {encode_settings.bitrate}")
-
-        if encode_settings.codec in constants.QUANTIZED_SAMPLE_RATE_CODECS:
-            encode_settings.samplerate = str(utils.quantize_sample_rate(
-                encode_settings.codec,
-                int(encode_settings.samplerate))
-            )
-
-        print(colors.options("Using sample rate:") + f" {encode_settings.samplerate}Hz")
-
-    builder = pipeline_builder.Audio(backend, platform, encode_settings)
-    command = builder.command
-
-if debug is True:
-    print(":::audio::: command " + str(command))
-
-
-def _flask_init():
-    # TODO(xsdg): Update init_audio to take an EncodeSettings.
+        command = pipeline_builder.Audio(backend, settings.platform, encode).command
+        if backend.name == "parec":
+            producer = [backend.path, "--format=s16le", "--rate=" + str(sample_rate),
+                        "--channels=2", "-d", settings.capture_device]
+            # All raw PCM encoders must agree with the producer's format.
+            if settings.codec == "mp3":
+                command = ["lame", "-r", "-s", str(sample_rate / 1000), "-b", str(encode.bitrate), "-", "-"]
+            elif settings.codec == "ogg":
+                command = ["oggenc", "-r", "-R", str(sample_rate), "-C", "2", "-b", str(encode.bitrate), "--ignorelength", "-o", "-", "-"]
+            elif settings.codec == "aac":
+                command = ["faac", "-P", "-R", str(sample_rate), "-C", "2", "-B", "16", "-X", "-b", str(encode.bitrate), "-o", "-", "-"]
+        else:
+            command = [settings.capture_device if v == "Mkchromecast.monitor" else v for v in command]
     stream_infra.FlaskServer.init_audio(
-        adevice=encode_settings.adevice,
-        backend=backend,
-        bitrate=encode_settings.bitrate,
-        buffer_size=buffer_size,
-        codec=encode_settings.codec,
-        command=command,
-        media_type=media_type,
-        platform=platform,
-        samplerate=encode_settings.samplerate)
+        adevice=encode.adevice, backend=backend, bitrate=encode.bitrate,
+        buffer_size=max(8192, min(1024 * 1024, 2 * settings.chunk_size ** 2)),
+        codec=settings.codec, command=command, producer=producer,
+        media_type=media_type, platform=settings.platform, samplerate=str(sample_rate),
+    )
 
 
-def main():
-    pipeline = stream_infra.PipelineProcess(_flask_init, ip, port, platform)
-    pipeline.start()
+def main(settings=None, cancel=None):
+    settings = settings or Mkchromecast()
+    pipeline = stream_infra.PipelineProcess(partial(_flask_init, settings),
+                                            settings.host, settings.port, settings.platform)
+    pipeline.start(timeout=settings.startup_timeout, cancel=cancel)
+    return pipeline

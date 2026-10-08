@@ -2,8 +2,7 @@
 # brew install pyqt5 --with-python --without-python3
 
 import os
-import pickle
-import psutil
+from pathlib import Path
 import signal
 import socket
 import subprocess
@@ -36,121 +35,56 @@ except ImportError:
     chromecast = False
 
 
-# TODO(xsdg): Encapsulate this so that we don't do this work on import.
-_mkcc = mkchromecast.Mkchromecast()
-
-
 class menubar(QtWidgets.QMainWindow):
-    def __init__(self):
-        self.cc = cast.Casting(_mkcc)
-        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    def __init__(self, settings):
+        super().__init__()
+        self.settings = settings
+        self.app = QtWidgets.QApplication.instance()
+        self.app.setQuitOnLastWindowClosed(False)
         self.cast = None
         self.stopped = False
         self.played = False
         self.pcastfailed = False
-
-        self.available_devices: list[cast.AvailableDevice] = []
-
-        # TODO(xsdg): pull this directly from _mkcc.
-        self.config = config.Config(platform=_mkcc.platform,
-                                    read_only=True,
-                                    debug=_mkcc.debug)
+        self.available_devices = []
+        self._pending_device = None
+        self._exiting = False
+        self.scale_factor = 1
+        self.config = config.Config(platform=settings.platform, read_only=True, debug=settings.debug)
         self.config.load_and_validate()
-
-        """
-        These dictionaries are used to set icons' colors
-        """
         self.google = {"black": "google", "blue": "google_b", "white": "google_w"}
-        self.google_working = {
-            "black": "google_working",
-            "blue": "google_working_b",
-            "white": "google_working_w",
-        }
-        self.google_nodev = {
-            "black": "google_nodev",
-            "blue": "google_nodev_b",
-            "white": "google_nodev_w",
-        }
-
-        """
-        This is used when searching for cast devices
-        """
-        self._search = mkchromecast.tray_threading.Search()  # no parent!
-        self._search_thread = QThread()  # no parent!
-
-        self._search.intReady.connect(self.onIntReady)
+        self.google_working = {"black": "google_working", "blue": "google_working_b", "white": "google_working_w"}
+        self.google_nodev = {"black": "google_nodev", "blue": "google_nodev_b", "white": "google_nodev_w"}
+        self._search = tray_threading.Search(settings)
+        self._search_thread = QThread(self)
         self._search.moveToThread(self._search_thread)
-        self._search.finished.connect(self._search_thread.quit)
+        self._search.intReady.connect(self.onIntReady)
+        self._search.failed.connect(self.show_error)
+        self._search.finished.connect(self._search_thread.quit, Qt.DirectConnection)
         self._search_thread.started.connect(self._search._search_cast_)
-
-        """
-        This is used when one clicks on cast device
-        """
-        self._player = mkchromecast.tray_threading.Player()  # no parent!
-        self._play_thread = QThread()  # no parent!
-
+        self._player = tray_threading.Player()
+        self._play_thread = QThread(self)
         self._player.moveToThread(self._play_thread)
         self._player.pcastready.connect(self.pcastready)
-        self._player.pcastfinished.connect(self._play_thread.quit)
+        self._player.pcastfinished.connect(self._play_thread.quit, Qt.DirectConnection)
         self._play_thread.started.connect(self._player._play_cast_)
-
-        """
-        This is used when one clicks on the updater
-        """
-        self._updater = mkchromecast.tray_threading.Updater()  # no parent!
-        self._updater_thread = QThread()  # no parent!
-
+        self._play_thread.finished.connect(self._play_finished)
+        self._updater = tray_threading.Updater()
+        self._updater_thread = QThread(self)
         self._updater.moveToThread(self._updater_thread)
         self._updater.updateready.connect(self.updateready)
-        self._updater.upcastfinished.connect(self._updater_thread.quit)
+        self._updater.upcastfinished.connect(self._updater_thread.quit, Qt.DirectConnection)
         self._updater_thread.started.connect(self._updater._updater_)
-
-        self.app = QtWidgets.QApplication(sys.argv)
-        """
-        This is to determine the scale factor.
-        """
-        screen_resolution = self.app.desktop().screenGeometry()
-        self.width = screen_resolution.width()
-        self.height = screen_resolution.height()
-        if self.height > 1280:
-            self.scale_factor = 2
-        else:
-            self.scale_factor = 1
-
-        if _mkcc.debug is True:
-            print(":::systray::: Screen resolution: ", self.width, self.height)
-        # This avoid the QMessageBox to close parent processes.
-        self.app.setQuitOnLastWindowClosed(False)
-
-        if hasattr(QtCore.Qt, "AA_UseHighDpiPixmaps"):
-            self.app.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps)
-            if _mkcc.debug is True:
-                print(":::systray::: High-DPI screen detected...")
-
-        # TODO(xsdg): Is this used?  Is this a special field?
-        self.w = QWidget()
-
-        # This is useful when launching from git repo
-        icon_name = self.google[self.config.colors]
-        if os.path.exists(f"images/{icon_name}.icns"):
-            self.icon = QtGui.QIcon()
-            if _mkcc.platform == "Darwin":
-                self.icon.addFile(f"images/{icon_name}.icns")
-            else:
-                self.icon.addFile(f"images/{icon_name}.png")
-        else:
-            self.icon = QtGui.QIcon()
-            if _mkcc.platform == "Linux":
-                self.icon.addFile(
-                    f"/usr/share/mkchromecast/images/{icon_name}.png"
-                )
-            else:
-                self.icon.addFile(f"{icon_name}.icns")
-
-        super().__init__()
-
-        # TODO(xsdg): Move UI creation out of the constructor.
+        self.icon = QtGui.QIcon(self._icon_path(self.google[self.config.colors]))
         self.createUI()
+
+    def _icon_path(self, name):
+        from pathlib import Path
+        extension = ".icns" if self.settings.platform == "Darwin" else ".png"
+        return str(Path(__file__).parent / "resources" / (name + extension))
+
+    def show_error(self, message):
+        if not self._exiting:
+            self.tray.showMessage("Mkchromecast", message, QtWidgets.QSystemTrayIcon.Warning)
 
     def createUI(self):
         self.tray = QtWidgets.QSystemTrayIcon(self.icon)
@@ -175,7 +109,7 @@ class menubar(QtWidgets.QMainWindow):
         """
         if self.config.search_at_launch:
             self.search_cast()
-        self.app.exec_()  # We start showing the system tray
+
 
     def search_menu(self):
         self.SearchAction = self.menu.addAction("Search For Media " "Streaming Devices")
@@ -225,19 +159,8 @@ class menubar(QtWidgets.QMainWindow):
         self.available_devices = available_devices
         self.cast_list()
 
-    def _set_generic_icon(self, icon_set: dict):
-        icon_name = icon_set[self.config.colors]
-        if os.path.exists(f"images/{icon_name}.icns"):
-            if _mkcc.platform == "Darwin":
-                self.tray.setIcon(QtGui.QIcon(f"images/{icon_name}.icns"))
-            else:
-                self.tray.setIcon(QtGui.QIcon(f"images/{icon_name}.png"))
-        else:
-            if _mkcc.platform == "Linux":
-                self.tray.setIcon(QtGui.QIcon(
-                    f"/usr/share/mkchromecast/images/{icon_name}.png"))
-            else:
-                self.tray.setIcon(QtGui.QIcon(f"{icon_name}.icns"))
+    def _set_generic_icon(self, icon_set):
+        self.tray.setIcon(QtGui.QIcon(self._icon_path(icon_set[self.config.colors])))
 
     def set_icon_working(self):
         """docstring for fnamicon_working"""
@@ -255,20 +178,10 @@ class menubar(QtWidgets.QMainWindow):
         self._set_generic_icon(self.google_nodev)
 
     def search_cast(self):
+        if self._search_thread.isRunning() or self._exiting:
+            return
         self.set_icon_working()
-        """
-        This catches the error caused by an empty .tmp file
-        """
-        if os.path.exists("/tmp/mkchromecast.tmp") is True:
-            try:
-                self.tf = open("/tmp/mkchromecast.tmp", "rb")
-                self.index = pickle.load(self.tf)
-            except EOFError:
-                os.remove("/tmp/mkchromecast.tmp")
-
-        if self.stopped is True and os.path.exists("/tmp/mkchromecast.tmp") is True:
-            os.remove("/tmp/mkchromecast.tmp")
-
+        self._search.cancel.clear()
         self._search_thread.start()
 
     def cast_list(self):
@@ -276,6 +189,9 @@ class menubar(QtWidgets.QMainWindow):
 
         if not self.available_devices:
             self.menu.clear()
+            for old_action in self.ag.actions():
+                self.ag.removeAction(old_action)
+                old_action.deleteLater()
             self.search_menu()
             self.separator_menu()
             self.NodevAction = self.menu.addAction("No Streaming Devices Found.")
@@ -291,43 +207,12 @@ class menubar(QtWidgets.QMainWindow):
             self.about_menu()
             self.exit_menu()
         else:
-            if _mkcc.platform == "Darwin" and self.config.notifications:
-                icon_name = self.google[self.config.colors]
-                if os.path.exists(f"images/{icon_name}.icns"):
-                    noticon = f"images/{icon_name}.icns"
-                else:
-                    noticon = f"{icon_name}.icns"
-
-                found = [
-                    "./notifier/terminal-notifier.app/Contents/MacOS/terminal-notifier",
-                    "-group", "cast",
-                    "-contentImage", noticon,
-                    "-title", "Mkchromecast",
-                    "-message", "Media Streaming Devices Found!",
-                ]
-                subprocess.Popen(found)
-                if _mkcc.debug is True:
-                    print(":::systray:::", found)
-            elif _mkcc.platform == "Linux" and self.config.notifications:
-                try:
-                    import gi
-
-                    gi.require_version("Notify", "0.7")
-                    from gi.repository import Notify
-
-                    Notify.init("Mkchromecast")
-                    found = Notify.Notification.new(
-                        "Mkchromecast",
-                        "Media Streaming Devices Found!",
-                        "dialog-information",
-                    )
-                    found.show()
-                except ImportError:
-                    print(
-                        "If you want to receive notifications in Linux, "
-                        "install libnotify and python-gobject"
-                    )
+            if self.config.notifications:
+                self.tray.showMessage("Mkchromecast", "Media streaming devices found")
             self.menu.clear()
+            for old_action in self.ag.actions():
+                self.ag.removeAction(old_action)
+                old_action.deleteLater()
             self.search_menu()
             self.separator_menu()
             print("Available Media Streaming Devices", self.available_devices)
@@ -361,202 +246,79 @@ class menubar(QtWidgets.QMainWindow):
             self.about_menu()
             self.exit_menu()
 
-    def clicked_cc(self, clicked_item: cast.AvailableDevice):
-        if self.played:
-            self.cast.quit_app()
+    def clicked_cc(self, clicked_item):
+        if self._exiting:
+            return
+        if self._play_thread.isRunning():
+            self._pending_device = clicked_item
+            self._player.stop()
+            return
+        self._start_device(clicked_item)
 
-        if _mkcc.debug is True:
-            print(":::tray::: clicked item: %s." % clicked_item)
-        self.index = clicked_item.index
-        self.cast_to = clicked_item.name
-        self.play_cast()
+    def _start_device(self, device):
+        try:
+            import copy
+            args = copy.copy(self.settings.args)
+            args.device_id = device.id
+            args.name = None
+            settings = mkchromecast.Mkchromecast(args)
+            self._player.prepare(settings)
+        except Exception as exc:
+            self.show_error(str(exc))
+            return
+        self.played = True
+        self.stopped = False
+        self.set_icon_working()
+        self._play_thread.start()
 
     def pcastready(self, message):
-        print("pcastready ?", message)
         if message == "_play_cast_ success":
+            self.cast = self._player.session.receiver.cast
             self.pcastfailed = False
-            if os.path.exists("/tmp/mkchromecast.tmp") is True:
-                self.cast = mkchromecast.tray_threading.cast
-
             self.set_icon_idle()
         else:
             self.pcastfailed = True
             self.set_icon_nodev()
-            self.stop_cast()
-            # This should stop the play process when there is an error in the
-            # threading _play_cast_
-            pass
+            if not self._player.stop_requested:
+                self.show_error(message)
 
-    def play_cast(self):
-        if self.played is True:
-            self.kill_child()
-
-        self.set_icon_working()
-
-        while True:
-            try:
-                if os.path.exists("/tmp/mkchromecast.tmp") is True:
-                    self.tf = open("/tmp/mkchromecast.tmp", "wb")
-                pickle.dump(self.cast_to, self.tf)
-                self.tf.close()
-            except ValueError:
-                continue
-            break
-        self.played = True
-        self._play_thread.start()
+    def _play_finished(self):
+        self.cast = None
+        self.played = False
+        self.stopped = True
+        self.set_icon_idle()
+        if self._pending_device is not None and not self._exiting:
+            device, self._pending_device = self._pending_device, None
+            self._start_device(device)
 
     def stop_cast(self):
-        if self.stopped is False:
-            pass
-
-        if self.cast is not None or self.stopped is True or self.pcastfailed is True:
-            try:
-                self.cast.quit_app()
-            except AttributeError:
-                # This is for sonos. The thing is that if we are at this point,
-                # user requested an stop or cast failed.
-                self.cast.stop()
-            self.reset_audio()
-
-            try:
-                self.kill_child()
-            except psutil.NoSuchProcess:
-                pass
-            checkmktmp()
-            self.search_cast()
-
-            # This is to retry when stopping and
-            # pychromecast.error.NotConnected raises.
-            if chromecast:
-                while True:
-                    try:
-                        self.cast.quit_app()
-                    except pychromecast.error.NotConnected:
-                        continue
-                    except AttributeError:
-                        # This is for sonos. The thing is that if we are at this
-                        # point, user requested an stop or cast failed.
-                        self.cast.stop()
-                    break
-
-            self.stopped = True
-            self.read_config()
-
-            if _mkcc.platform == "Darwin" and self.config.notifications:
-                if self.pcastfailed is True:
-                    stop = [
-                        "./notifier/terminal-notifier.app/Contents/MacOS/terminal-notifier",
-                        "-group", "cast",
-                        "-title", "Mkchromecast",
-                        "-message", "Streaming Process Failed. Try Again...",
-                    ]
-                else:
-                    stop = [
-                        "./notifier/terminal-notifier.app/Contents/MacOS/terminal-notifier",
-                        "-group", "cast",
-                        "-title", "Mkchromecast",
-                        "-message", "Streaming Stopped!",
-                    ]
-                subprocess.Popen(stop)
-                if _mkcc.debug is True:
-                    print(":::systray::: stop", stop)
-
-            elif _mkcc.platform == "Linux" and self.config.notifications:
-                try:
-                    import gi
-
-                    gi.require_version("Notify", "0.7")
-                    from gi.repository import Notify
-
-                    Notify.init("Mkchromecast")
-                    if self.pcastfailed is True:
-                        stop = Notify.Notification.new(
-                            "Mkchromecast",
-                            "Streaming Process Failed. Try Again...",
-                            "dialog-information",
-                        )
-                    else:
-                        stop = Notify.Notification.new(
-                            "Mkchromecast", "Streaming Stopped!", "dialog-information"
-                        )
-                    stop.show()
-                except ImportError:
-                    print(
-                        "If you want to receive notifications in Linux, "
-                        "install  libnotify and python-gobject"
-                    )
+        self._pending_device = None
+        self._player.stop()
 
     def volume_cast(self):
+        if not self._play_thread.isRunning() or self.cast is None:
+            return
         self.sl = QtWidgets.QSlider(Qt.Horizontal)
-        self.sl.setMinimum(0)
-        self.sl.setGeometry(
-            30 * self.scale_factor,
-            40 * self.scale_factor,
-            260 * self.scale_factor,
-            70 * self.scale_factor,
-        )
+        self.sl.setRange(0, 100)
         self.sl.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
-        try:
-            self.maxvolset = 100
-            self.sl.setMaximum(self.maxvolset)
-            self.sl.setValue(round((self.cast.status.volume_level * self.maxvolset), 1))
-        except AttributeError:
-            self.maxvolset = 100
-            self.sl.setMaximum(self.maxvolset)
-            if self.played is False:
-                self.sl.setValue(2)
-            else:
-                try:
-                    self.sl.setValue(self.cast.volume)
-                except:
-                    pass
+        level = (round(self.cast.status.volume_level * 100)
+                 if self.settings.receiver == "chromecast" else 20)
+        self.sl.setValue(int(level))
         self.sl.valueChanged.connect(self.value_changed)
         self.sl.setWindowTitle("Device Volume")
+        self.sl.resize(280, 70)
         self.sl.show()
 
     def value_changed(self, value):
-        try:
-            """
-            Chromecast volume
-            """
-            volume = value / self.maxvolset
-            self.cast.set_volume(volume)
-            if round(self.cast.status.volume_level, 1) == 1:
-                print(colors.warning(":::systray::: Maximum volume level reached!"))
-
-            if _mkcc.debug is True:
-                print(":::systray::: Volume set to: " + str(volume))
-        except AttributeError:
-            pass
-
-        try:
-            """
-            Sonos volume
-            """
-            self.maxvolset = 100
-            volume = value
-            self.cast.volume = volume
-            self.cast.play()
-            if (self.cast.volume) == 100:
-                print(colors.warning(":::systray::: Maximum volume reached!"))
-
-            if _mkcc.debug is True:
-                print(":::systray::: Volume set to: " + str(volume))
-        except AttributeError:
-            pass
-
-        if _mkcc.debug is True:
-            print(":::systray::: Volume changed: " + str(value))
+        if self._play_thread.isRunning():
+            self._player.commands.put(("volume", value / 100))
 
     def reset_audio(self):
-        if _mkcc.platform == "Darwin":
-            inputint()
-            outputint()
-        else:
-            remove_sink()
+        # The session restores only its own routing; do not unload other sessions.
+        self.stop_cast()
 
     def preferences_show(self):
-        self.p = mkchromecast.preferences.preferences(self.scale_factor)
+        self.p = preferences.preferences(self.scale_factor, self.settings)
         self.p.show()
 
     def updateready(self, message):
@@ -585,19 +347,8 @@ class menubar(QtWidgets.QMainWindow):
             updaterBox.setInformativeText("""Try again later.""")
         else:
             updaterBox.setText("New version of Mkchromecast available!")
-            if _mkcc.platform == "Darwin":
-                download = (
-                    '<a href="https://github.com/muammar/mkchromecast/releases/download/'
-                    + message
-                    + "/mkchromecast_v"
-                    + message
-                    + '.dmg">'
-                )
-            elif _mkcc.platform == "Linux":
-                download = (
-                    '<a href="http://github.com/muammar/mkchromecast/releases/latest">'
-                )
-            if _mkcc.debug is True:
+            download = '<a href="https://github.com/Ayylmao13337/mkchromecast2.0/releases/latest">'
+            if self.settings.debug is True:
                 print("Download URL:", download)
             updaterBox.setInformativeText(
                 "You can " + download + "download it by clicking here</a>."
@@ -606,23 +357,13 @@ class menubar(QtWidgets.QMainWindow):
         updaterBox.exec_()
 
     def update_show(self):
-        self._updater_thread.start()
+        if not self._updater_thread.isRunning() and not self._exiting:
+            self._updater_thread.start()
 
     def about_show(self):
         msgBox = QMessageBox()
         msgBox.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
-        # This is useful when launching from git repo
-        if os.path.exists("images/google.icns") is True:
-            if _mkcc.platform == "Darwin":
-                self.about_icon = "images/google.icns"
-            else:
-                self.about_icon = "images/google.png"
-        # This is useful for applications
-        else:
-            if _mkcc.platform == "Linux":
-                self.about_icon = "/usr/share/mkchromecast/images/google.png"
-            else:
-                self.about_icon = "google.icns"
+        self.about_icon = str(Path(__file__).with_name("resources") / "google.png")
 
         msgsettext = (
             '<center><img src="'
@@ -660,70 +401,33 @@ class menubar(QtWidgets.QMainWindow):
         )
         msgBox.exec_()
 
-    def kill_child(self):  # Not a beautiful name, I know...
-        self.parent_pid = os.getpid()
-        self.parent = psutil.Process(self.parent_pid)
-        # or parent.children() for recursive=False
-        for child in self.parent.children(recursive=True):
-            child.kill()
-
     def exit_all(self):
-        del_tmp()
-        if self.cast is None and self.stopped is False:
-            self.app.quit()
-        elif self.stopped is True or self.cast is not None:
-            self.kill_child()
-            self.stop_cast()
-            self.app.quit()
-        else:
-            self.app.quit()
+        self._exiting = True
+        self._pending_device = None
+        self._player.stop()
+        self._search.cancel.set()
+        self._await_shutdown()
 
-    """
-    Notifications
-    """
+    def _await_shutdown(self):
+        if any(thread.isRunning() for thread in
+               (self._play_thread, self._search_thread, self._updater_thread)):
+            QtCore.QTimer.singleShot(100, self._await_shutdown)
+        else:
+            self.tray.hide()
+            self.app.quit()
 
     def search_notification(self):
-        if _mkcc.platform == "Darwin" and self.config.notifications:
-            icon_name = self.google[self.config.colors]
-            if os.path.exists(f"images/{icon_name}.icns"):
-                noticon = f"images/{icon_name}.icns"
-            else:
-                noticon = f"{icon_name}.icns"
-            searching = [
-                "./notifier/terminal-notifier.app/Contents/MacOS/terminal-notifier",
-                "-group", "cast",
-                "-contentImage", noticon,
-                "-title", "Mkchromecast",
-                "-message", "Searching for Media Streaming Devices...",
-            ]
-            subprocess.Popen(searching)
-            if _mkcc.debug is True:
-                print(":::systray:::", searching)
-        elif _mkcc.platform == "Linux" and self.config.notifications:
-            try:
-                import gi
-
-                gi.require_version("Notify", "0.7")
-                from gi.repository import Notify
-
-                Notify.init("Mkchromecast")
-                found = Notify.Notification.new(
-                    "Mkchromecast",
-                    "Searching for Media Streaming Devices...",
-                    "dialog-information",
-                )
-                found.show()
-            except ImportError:
-                print(
-                    "If you want to receive notifications in Linux, "
-                    "install libnotify and python-gobject."
-                )
+        self.tray.showMessage("Mkchromecast", "Searching for streaming devices")
 
 
-def main():
-    menubar()
-
-
-if __name__ == "__main__":
-    checkmktmp()
-    main()
+def main(settings=None):
+    settings = settings or mkchromecast.Mkchromecast()
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    window = menubar(settings)
+    signal.signal(signal.SIGINT, lambda *_: window.exit_all())
+    signal.signal(signal.SIGTERM, lambda *_: window.exit_all())
+    # Let Python service signals while Qt is idle.
+    timer = QtCore.QTimer(window)
+    timer.timeout.connect(lambda: None)
+    timer.start(200)
+    return app.exec_()

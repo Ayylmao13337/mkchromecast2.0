@@ -1,11 +1,5 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+from mkchromecast.cli import main
 
-# This file is part of mkchromecast. It is used to build the macOS app.
-from mkchromecast.utils import checkmktmp, writePidFile
-import mkchromecast.systray
-
-# TODO(xsdg): This should go through mkchromecast and shouldn't be a separate
-# entrypoint.
-checkmktmp()
-writePidFile()
-mkchromecast.systray.main()
+if __name__ == "__main__":
+    raise SystemExit(main(["--tray"]))

@@ -1,6 +1,7 @@
 # This file is part of Mkchromecast.
 
 import os
+import math
 import platform
 import shlex
 import subprocess
@@ -22,13 +23,17 @@ class Mkchromecast:
     def __init__(self, args = None):
         # TODO(xsdg): Require arg parsing to be done outside of this class.
         first_parse: bool = False
-        if not args:
+        if args is None:
             if not self._parsed_args:
                 Mkchromecast._parsed_args = _arg_parsing.Parser.parse_args()
                 first_parse = True
             args = Mkchromecast._parsed_args
 
         self.args = args
+        self.device_id = getattr(args, "device_id", None)
+        self.receiver = getattr(args, "receiver", "chromecast")
+        self.discovery_timeout = getattr(args, "discovery_timeout", 10.0)
+        self.startup_timeout = getattr(args, "startup_timeout", 330.0)
         self.debug: bool = args.debug
 
         # Operating Mode
@@ -121,7 +126,7 @@ class Mkchromecast:
                                    "supported backends: "))
                 for backend in backend_options:
                     print(f"- {backend}.")
-                sys.exit(0)
+                sys.exit(2)
 
             # encoder_backend is reasonable.
             self.backend = args.encoder_backend
@@ -152,26 +157,19 @@ class Mkchromecast:
                 print(colors.error("Supported audio codecs are: "))
                 for codec in codec_choices:
                     print(f"- {codec}")
-                sys.exit(0)
+                sys.exit(2)
 
             self.codec = args.codec
 
-        # TODO(xsdg): Add support for yt-dlp
-        command_choices = ["ffmpeg", "yt-dlp"]
-        self.command: Optional[str]
-        if not args.command:
-            self.command = None
-        else:
-            # TODO(xsdg): Unbreak this so that it can accept a full command
-            # string, and not just a command name.
-            if args.command not in command_choices:
-                print(colors.options(f"Configured command: {args.command}"))
-                print(colors.error("Supported commands are: "))
-                for command in command_choices:
-                    print(f"- {command}")
-                sys.exit(0)
-
-            self.command = args.command
+        self.command: Optional[list[str]] = None
+        if args.command:
+            self.command = shlex.split(args.command)
+            if not self.command or os.path.basename(self.command[0]) != "ffmpeg":
+                self._fatal_error("--command must start with ffmpeg")
+            if self.command[-1] not in {"pipe:", "pipe:1", "-"}:
+                self._fatal_error("--command must send its output to pipe:1")
+            if not args.video:
+                self._fatal_error("--command requires --video")
 
         resolution_choices = [r.lower() for r in resolutions.keys()]
         self.resolution: Optional[str]
@@ -184,9 +182,9 @@ class Mkchromecast:
                 print(colors.error("Supported resolutions are: "))
                 for resolution in resolution_choices:
                     print(f"- {resolution}")
-                sys.exit(0)
+                sys.exit(2)
 
-            self.resolution = args.resolution
+            self.resolution = args.resolution.lower()
 
         self.bitrate: int
         if tray_config:
@@ -194,7 +192,7 @@ class Mkchromecast:
         elif self.codec in constants.CODECS_WITH_BITRATE:
             if args.bitrate <= 0:
                 print(colors.error("Bitrate must be a positive integer"))
-                sys.exit(0)
+                sys.exit(2)
 
             self.bitrate = args.bitrate
         else:
@@ -203,12 +201,12 @@ class Mkchromecast:
 
         if args.chunk_size <= 0:
             print(colors.error("Chunk size must be a positive integer"))
-            sys.exit(0)
+            sys.exit(2)
         self.chunk_size: int = args.chunk_size
 
-        if args.sample_rate < 22050:
-            print(colors.error("Sample rate must be at least 22050"))
-            sys.exit(0)
+        if not 22050 <= args.sample_rate <= 192000:
+            print(colors.error("Sample rate must be between 22050 and 192000"))
+            sys.exit(2)
 
         self.samplerate: int
         if tray_config:
@@ -243,7 +241,7 @@ class Mkchromecast:
                 print(colors.error(youtube_error))
                 print(message)
 
-                sys.exit(0)
+                sys.exit(2)
 
             # TODO(xsdg): Warn that we're overriding the backend here.
             # Especially since this doesn't account for platform.
@@ -251,7 +249,43 @@ class Mkchromecast:
             self.backend = "ffmpeg"
 
         # Argument validation.
+        if self.tries is not None and self.tries <= 0:
+            self._fatal_error("--tries must be a positive integer")
+        if self.videoarg and self.operation == OpMode.AUDIOCAST and not self.command:
+            self._fatal_error("--video requires an input file, URL, screencast or custom command")
+        if self.mtype and self.operation != OpMode.SOURCE_URL and not self.command:
+            self._fatal_error("--mtype is only valid with --source-url or --command; generated media sets its own MIME type")
         self._validate_input_file()
+        if not 1 <= self.port <= 65535:
+            self._fatal_error("Port must be between 1 and 65535")
+        try:
+            fps = float(self.fps)
+        except (TypeError, ValueError):
+            self._fatal_error("FPS must be a number")
+        if not 0 < fps <= 120:
+            self._fatal_error("FPS must be greater than 0 and at most 120")
+        if self.source_url and not check_url(self.source_url):
+            self._fatal_error("--source-url must be an absolute HTTP(S) URL")
+        if self.command and self.operation not in {OpMode.AUDIOCAST, OpMode.INPUT_FILE}:
+            self._fatal_error("--command cannot be combined with this action")
+        if self.command:
+            self.operation = OpMode.INPUT_FILE
+        if self.screencast and self.platform != "Linux":
+            self._fatal_error("Screen capture currently supports Linux only")
+        if self.screencast and not self.videoarg:
+            self._fatal_error("--screencast requires --video")
+        if args.segment_time is not None:
+            self._fatal_error("--segment-time is not supported by the live HTTP pipeline")
+        if self.adevice and self.backend != "ffmpeg":
+            self._fatal_error("--alsa-device requires --encoder-backend ffmpeg")
+        if self.subtitles and not os.path.isfile(self.subtitles):
+            self._fatal_error("Subtitle file does not exist")
+        if self.subtitles and not (self.input_file and self.videoarg):
+            self._fatal_error("--subtitles requires --video and --input-file")
+        if self.receiver == "sonos" and self.videoarg:
+            self._fatal_error("Sonos supports audio only")
+        if any(not math.isfinite(t) or t <= 0 for t in (self.discovery_timeout, self.startup_timeout)):
+            self._fatal_error("Timeouts must be positive")
 
 
         # Diagnostic messages
@@ -267,10 +301,6 @@ class Mkchromecast:
             if self.mtype and not self.videoarg:
                 print(colors.warning(
                     "The media type argument is only supported for video."))
-
-            if self.loop and self.videoarg:
-                print(colors.warning(
-                    "The loop and video arguments aren't compatible."))
 
             if self.command and not self.videoarg:
                 print(colors.warning(
@@ -298,9 +328,5 @@ class Mkchromecast:
     def _fatal_error(self, msg: str) -> None:
         """Prints the specified message and then exits."""
         print(colors.warning(msg))
-        sys.exit()
+        raise ValueError(msg)
 
-    def __enter__(self):
-        """Starts performing whatever task is requested."""
-
-    

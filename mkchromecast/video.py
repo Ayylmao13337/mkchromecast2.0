@@ -4,10 +4,8 @@
 Google Cast device has to point out to http://ip:5000/stream
 """
 
-import getpass
+from functools import partial
 import os
-import pickle
-import subprocess
 
 import mkchromecast
 from mkchromecast import colors
@@ -17,12 +15,7 @@ from mkchromecast import stream_infra
 from mkchromecast import utils
 from mkchromecast.constants import OpMode
 
-# Holds the live portal session for Wayland screencast so it stays alive (and
-# its node remains castable) for the whole run: the Flask server mints a fresh
-# PipeWire fd from it on every /stream request. PortalScreenCastSession.close()
-# is intentionally never called explicitly — cleanup happens when the forked
-# streaming child process exits on teardown (the kernel closes all fds and the
-# portal session is dropped).
+# The streaming child owns this portal session and closes it on teardown.
 _active_wayland_session = None
 
 
@@ -70,12 +63,18 @@ def _build_video_settings(mkcc, wayland_capture):
         vcodec=mkcc.vcodec,
         youtube_url=mkcc.youtube_url,
         wayland_capture=wayland_capture,
+        copy_video=getattr(mkcc, "copy_video", False),
     )
 
 
-def _flask_init():
+def _flask_init(mkcc=None):
     global _active_wayland_session
-    mkcc = mkchromecast.Mkchromecast()
+    mkcc = mkcc or mkchromecast.Mkchromecast()
+
+    if getattr(mkcc, "direct_file", None):
+        stream_infra.FlaskServer.init_video(
+            chunk_size=65536, direct_file=mkcc.direct_file, media_type="video/mp4")
+        return
 
     if (mkcc.operation == OpMode.SCREENCAST
             and screencast_wayland.is_wayland_session()):
@@ -84,6 +83,9 @@ def _flask_init():
                 screencast_wayland.PortalScreenCastSession())
             node = _active_wayland_session.open()
         except screencast_wayland.PortalError as exc:
+            if _active_wayland_session is not None:
+                _active_wayland_session.close()
+                _active_wayland_session = None
             print(colors.error(f"Wayland screencast failed: {exc}"))
             print(colors.warning(
                 "Ensure xdg-desktop-portal (with a backend such as "
@@ -98,8 +100,14 @@ def _flask_init():
             # needs its own fd to attach to the shared monitor node.
             fd = _active_wayland_session.open_pipewire_fd()
             os.set_inheritable(fd, True)
-            command = pipeline_builder.Video(
-                _build_video_settings(mkcc, (fd, node))).command
+            try:
+                command = pipeline_builder.Video(
+                    _build_video_settings(mkcc, (fd, node))).command
+                command = ["device=" + getattr(mkcc, "capture_device", "Mkchromecast.monitor")
+                           if v == "device=Mkchromecast.monitor" else v for v in command]
+            except BaseException:
+                os.close(fd)
+                raise
             if mkcc.debug is True:
                 print(f":::gst::: pipeline_builder command: {command}")
             return command, [fd]
@@ -108,6 +116,7 @@ def _flask_init():
             chunk_size=mkcc.chunk_size,
             command_factory=command_factory,
             media_type=(mkcc.mtype or "video/mp4"),
+            cleanup=_active_wayland_session.close,
         )
         return
 
@@ -117,72 +126,21 @@ def _flask_init():
 
     stream_infra.FlaskServer.init_video(
         chunk_size=mkcc.chunk_size,
-        command=builder.command,
+        command=[getattr(mkcc, "capture_device", "Mkchromecast.monitor")
+                 if v == "Mkchromecast.monitor" else v for v in builder.command],
         media_type=(mkcc.mtype or "video/mp4"),
     )
 
 
-def main():
-    mkcc = mkchromecast.Mkchromecast()
-    ip = utils.get_effective_ip(
-        mkcc.platform, host_override=mkcc.host, fallback_ip="0.0.0.0")
-
-    if mkcc.backend != "node":
-        pipeline = stream_infra.PipelineProcess(_flask_init, ip, mkcc.port, mkcc.platform)
-        pipeline.start()
-    else:
-        print("Starting Node")
-
-        # TODO(xsdg): This implies that the `node` backend is only compatible
-        # with INPUT_FILE OpMode, for video.  Double-check what's happening here
-        # and then implement that constraint directly in the Mkchromecast class.
-        if mkcc.operation != OpMode.INPUT_FILE:
-            print(colors.warning(
-                "The node video backend requires and only supports the input "
-                "file operation (-i argument)."))
-            utils.terminate()
-
-        if mkcc.platform == "Darwin":
-            PATH = (
-                "./bin:./nodejs/bin:/Users/"
-                + str(getpass.getuser())
-                + "/bin:/usr/local/bin:/usr/local/sbin:"
-                + "/usr/bin:/bin:/usr/sbin:"
-                + "/sbin:/opt/X11/bin:/usr/X11/bin:/usr/games:"
-                + os.environ["PATH"]
-            )
-        else:
-            PATH = os.environ["PATH"]
-
-        if mkcc.debug is True:
-            print("PATH = %s." % PATH)
-
-        node_names = ["node"]
-        nodejs_dir = ["./nodejs/"]
-
-        # TODO(xsdg): This is not necessarily where mkchromecast is installed,
-        # and may point to an unrelated mkchromecast install.
-        if mkcc.platform == "Linux":
-            node_names.append("nodejs")
-            nodejs_dir.append("/usr/share/mkchromecast/nodejs/")
-
-        for name in node_names:
-            if utils.is_installed(name, PATH, mkcc.debug):
-                for path in nodejs_dir:
-                    if os.path.isdir(path):
-                        path = path + "html5-video-streamer.js"
-                        webcast = [name, path, mkcc.input_file]
-                        break
-
-        try:
-            subprocess.Popen(webcast)
-        except:
-            # TODO(xsdg): Capture a specific exception here.
-            print(
-                colors.warning(
-                    "Nodejs is not installed in your system. "
-                    "Please, install it to use this backend."
-                )
-            )
-            print(colors.warning("Closing the application..."))
-            utils.terminate()
+def main(mkcc=None, cancel=None):
+    mkcc = mkcc or mkchromecast.Mkchromecast()
+    wayland_screencast_preflight(mkcc)
+    if (mkcc.operation == OpMode.SCREENCAST
+            and screencast_wayland.is_wayland_session() and mkcc.vcodec != "libx264"):
+        raise ValueError("Wayland capture currently supports --vcodec libx264 only")
+    if mkcc.backend == "node" and not getattr(mkcc, "direct_file", None):
+        raise ValueError("The node video compatibility option requires a directly playable MP4; use ffmpeg")
+    pipeline = stream_infra.PipelineProcess(partial(_flask_init, mkcc), mkcc.host,
+                                            mkcc.port, mkcc.platform)
+    pipeline.start(timeout=mkcc.startup_timeout, cancel=cancel)
+    return pipeline

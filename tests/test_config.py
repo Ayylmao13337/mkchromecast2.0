@@ -1,107 +1,75 @@
-# this file is part of mkchromecast.
-
-import configparser
-import os
-import pathlib
+"""Exercise persisted configuration, including interrupted writes and migration."""
+from pathlib import Path
+import tempfile
 import unittest
-from unittest import mock
+from unittest.mock import patch
+from mkchromecast.config import Config
 
-from mkchromecast import config
 
-class ClampBitrateTests(unittest.TestCase):
+class ConfigTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(mock.patch.object(os, "environ", autospec=True))
-        self.enterContext(mock.patch.object(configparser, "ConfigParser", autospec=True))
-        self.enterContext(mock.patch("builtins.open", autospec=True))
+        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.path = Path(self.tmp) / 'new' / 'mkchromecast.cfg'
 
-    def testInstantiateNewConfig(self):
-        mock_parser = configparser.ConfigParser()
-        config_path = pathlib.PurePath("/fake_dir/fake_path.txt")
-        conf = config.Config(platform="Linux", config_path=config_path)
-        with conf:
-            mock_parser.read.assert_called_once_with(config_path)
+    def test_defaults_create_directory_and_roundtrip(self):
+        with Config('Linux', self.path) as conf:
+            self.assertEqual('parec', conf.backend)
+            conf.bitrate = 256
+            conf.notifications = True
+            conf.alsa_device = None
+        with Config('Linux', self.path, read_only=True) as conf:
+            self.assertEqual(256, conf.bitrate)
+            self.assertTrue(conf.notifications)
+            self.assertIsNone(conf.alsa_device)
 
-        mock_parser.write.assert_called_once()
+    def test_readonly_does_not_create_files(self):
+        with Config('Darwin', self.path, read_only=True) as conf:
+            self.assertEqual('node', conf.backend)
+        self.assertFalse(self.path.parent.exists())
 
-    def testInstantiateNewReadOnlyConfig(self):
-        mock_parser = configparser.ConfigParser()
-        config_path = pathlib.PurePath("/fake_dir/fake_path.txt")
-        conf = config.Config(
-            platform="Darwin", config_path=config_path, read_only=True)
-        with conf:
-            mock_parser.read.assert_called_once_with(config_path)
+    def test_failed_context_does_not_overwrite(self):
+        with Config('Linux', self.path):
+            pass
+        before = self.path.read_bytes()
+        with self.assertRaises(RuntimeError):
+            with Config('Linux', self.path) as conf:
+                conf.bitrate = 128
+                raise RuntimeError('abort')
+        self.assertEqual(before, self.path.read_bytes())
 
-        mock_parser.write.assert_not_called()
+    def test_failed_replace_preserves_original_and_removes_temporary(self):
+        with Config('Linux', self.path):
+            pass
+        before = self.path.read_bytes()
+        with patch('mkchromecast.config.os.replace', side_effect=OSError('disk error')):
+            with self.assertRaises(OSError):
+                with Config('Linux', self.path) as conf:
+                    conf.bitrate = 128
+        self.assertEqual(before, self.path.read_bytes())
+        self.assertEqual([self.path], list(self.path.parent.iterdir()))
 
-    def testPropertyGetters(self):
-        config_path = pathlib.PurePath("/fake_dir/fake_path.txt")
-        conf = config.Config("Linux", config_path)
-        mock_parser = configparser.ConfigParser.return_value
-        props = {
-            "codec": str,
-            "bitrate": int,
-            "samplerate": int,
-            "notifications": bool,
-            "colors": str,
-            "search_at_launch": bool,
-            "alsa_device": str}
+    def test_migrates_legacy_without_deleting_it(self):
+        self.path.parent.mkdir()
+        legacy = self.path.with_name('mkchromecast_beta.cfg')
+        legacy.write_text('[settings]\nbitrate = 256\n')
+        with Config('Linux', self.path) as conf:
+            self.assertEqual(256, conf.bitrate)
+        self.assertTrue(self.path.exists())
+        self.assertTrue(legacy.exists())
 
-        for prop_name, prop_type in props.items():
-            with self.subTest(prop=prop_name):
-                mock_parser.reset_mock()
-                _ = getattr(conf, prop_name)
+    def test_invalid_configuration_is_not_silently_overwritten(self):
+        self.path.parent.mkdir()
+        for text in ('[settings]\nbackend = obsolete\n', '[settings]\nbitrate = nope\n',
+                     '[settings]\nnotifications = perhaps\n'):
+            with self.subTest(text=text):
+                self.path.write_text(text)
+                with self.assertRaises(ValueError):
+                    with Config('Linux', self.path):
+                        pass
+                self.assertEqual(text, self.path.read_text())
 
-                if prop_type == str:
-                    mock_parser.get.assert_called_once_with(
-                        config.SETTINGS, prop_name)
-                    mock_parser.getboolean.assert_not_called()
-                    mock_parser.getint.assert_not_called()
-                elif prop_type == int:
-                    mock_parser.get.assert_not_called()
-                    mock_parser.getint.assert_called_once_with(
-                        config.SETTINGS, prop_name)
-                    mock_parser.getboolean.assert_not_called()
-                elif prop_type == bool:
-                    mock_parser.get.assert_not_called()
-                    mock_parser.getint.assert_not_called()
-                    mock_parser.getboolean.assert_called_once_with(
-                        config.SETTINGS, prop_name)
-
-    def testPropertySetters(self):
-        config_path = pathlib.PurePath("/fake_dir/fake_path.txt")
-        conf = config.Config("Linux", config_path)
-        mock_parser = configparser.ConfigParser.return_value
-        props = {
-            "backend": str,
-            "codec": str,
-            "bitrate": int,
-            "samplerate": int,
-            "notifications": bool,
-            "colors": str,
-            "search_at_launch": bool,
-            "alsa_device": str}
-
-        for prop_name, prop_type in props.items():
-            with self.subTest(prop=prop_name):
-                mock_parser.reset_mock()
-                value = prop_type()
-                setattr(conf, prop_name, value)
-
-                mock_parser.set.assert_called_once_with(
-                    config.SETTINGS, prop_name, str(value))
-
-    def testEmptyAlsaDevice(self):
-        config_path = pathlib.PurePath("/fake_dir/fake_path.txt")
-        conf = config.Config("Linux", config_path)
-        mock_parser = configparser.ConfigParser.return_value
-        none_str = "None"
-
-        conf.alsa_device = None
-        mock_parser.set.assert_called_once_with(
-            config.SETTINGS, config.ALSA_DEVICE, none_str)
-
-        mock_parser.get.return_value = none_str
-        self.assertIsNone(conf.alsa_device)
-
-        mock_parser.get.return_value = "some value"
-        self.assertEqual("some value", conf.alsa_device)
+    def test_reset_writes_valid_defaults(self):
+        conf = Config('Linux', self.path)
+        conf.write_defaults()
+        conf.load_and_validate()
+        self.assertEqual(192, conf.bitrate)

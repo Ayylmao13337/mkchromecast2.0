@@ -2,7 +2,6 @@
 
 import json
 import os
-import pickle
 import psutil
 import socket
 import subprocess
@@ -125,27 +124,12 @@ def clamp_bitrate(codec: str, bitrate: Optional[int]) -> int:
 
 
 def terminate() -> None:
-    del_tmp()
-    parent_pid = os.getpid()
-    parent = psutil.Process(parent_pid)
-    for child in parent.children(recursive=True):
-        child.kill()
-    parent.kill()
+    """Unwind through the owner's finally blocks instead of killing the interpreter."""
+    raise RuntimeError("Casting could not be started; see the preceding diagnostic")
 
 
 def del_tmp(debug: bool = False) -> None:
-    """Delete files created in /tmp/"""
-    delete_me = ["/tmp/mkchromecast.tmp", "/tmp/mkchromecast.pid"]
-
-    if debug:
-        print(colors.important("Cleaning up /tmp/..."))
-
-    for f in delete_me:
-        if os.path.exists(f):
-            os.remove(f)
-
-    if debug:
-        print(colors.success("[Done]"))
+    """Compatibility no-op: sessions no longer create global /tmp files."""
 
 
 def is_installed(name, path, debug) -> bool:
@@ -163,54 +147,42 @@ def is_installed(name, path, debug) -> bool:
 
 
 def check_url(url):
-    """Check if a URL is correct"""
     try:
         result = urlparse(url)
-        return True if [result.scheme, result.netloc, result.path] else False
-    except Exception as e:
+        _ = result.port  # Validate malformed and out-of-range ports.
+        return (result.scheme in {"http", "https"} and bool(result.hostname)
+                and not any(c.isspace() for c in url))
+    except (TypeError, ValueError):
         return False
 
 
 def writePidFile() -> None:
-    pid_filename = "/tmp/mkchromecast.pid"
-    # This is to verify that pickle tmp file exists
-    if os.path.exists(pid_filename):
-        os.remove(pid_filename)
-
-    pid = str(os.getpid())
-    with open(pid_filename, "wb") as pid_file:
-        pickle.dump(pid, pid_file)
+    """Retained for older launchers; no filesystem IPC is required."""
 
 
 def checkmktmp() -> None:
-    # This is to verify that pickle tmp file exists
-    if os.path.exists("/tmp/mkchromecast.tmp"):
-        os.remove("/tmp/mkchromecast.tmp")
+    """Retained for older launchers; never delete another session's files."""
+
+
+def probe_media(name):
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_format", "-show_streams",
+         "-of", "json", str(name)], capture_output=True, text=True,
+        timeout=30, check=True,
+    )
+    return json.loads(result.stdout)
 
 
 def check_file_info(name, what=None):
-    """Check things about files"""
-
-    command = [
-        "ffprobe",
-        "-show_format",
-        "-show_streams",
-        "-loglevel", "quiet",
-        "-print_format", "json",
-        name,
-    ]
-
-    info = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    info_out, info_error = info.communicate()
-    d = json.loads(info_out)
-
+    video = next((s for s in probe_media(name).get("streams", [])
+                  if s.get("codec_type") == "video"), None)
+    if video is None:
+        raise ValueError("The input contains no video stream")
     if what == "bit-depth":
-        bit_depth = d["streams"][0]["pix_fmt"]
-        return bit_depth
-    elif what == "resolution":
-        resolution = d["streams"][0]["height"]
-        resolution = str(resolution) + "p"
-        return resolution
+        return video.get("pix_fmt")
+    if what == "resolution":
+        return f"{video['height']}p"
+    return video
 
 
 def get_effective_ip(platform, host_override=None, fallback_ip="127.0.0.1"):
@@ -231,30 +203,40 @@ def resolve_ip(platform, fallback_ip):
 
 
 def _resolve_ip_linux():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     try:
-        s.connect(("8.8.8.8", 80))
-    except socket.error:
-        return None
-    return s.getsockname()[0]
-
-
-def _resolve_ip_nonlinux():
-    try:
-        return socket.gethostbyname(f"{socket.gethostname()}.local")
-    except socket.gaierror:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
         return _get_first_network_ip_by_netifaces()
 
 
-def _get_first_network_ip_by_netifaces():
-    import netifaces
+def _resolve_ip_nonlinux():
+    return _resolve_ip_linux()
 
-    interfaces = netifaces.interfaces()
-    for interface in interfaces:
-        if interface == "lo":
+
+def _get_first_network_ip_by_netifaces():
+    # Retain the helper name without the unmaintained dependency.
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if address.family == socket.AF_INET and not address.address.startswith("127."):
+                return address.address
+    return None
+
+
+def address_for_receiver(host):
+    """Choose the route's source address without sending application data."""
+    for family, kind, proto, _, destination in socket.getaddrinfo(
+            host, 8009, type=socket.SOCK_DGRAM):
+        try:
+            with socket.socket(family, kind, proto) as sock:
+                sock.connect(destination)
+                return sock.getsockname()[0]
+        except OSError:
             continue
-        iface = netifaces.ifaddresses(interface).get(netifaces.AF_INET)
-        if iface != None and iface[0]["addr"] != "127.0.0.1":
-            for e in iface:
-                return str(e["addr"])
+    raise OSError(f"No route to receiver {host}")
+
+
+def http_url(host, port, path="/stream"):
+    authority = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"http://{authority}:{port}{path}"

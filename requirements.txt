@@ -1,8 +1,3 @@
-PyGObject
-requests
-psutil
-Flask
-netifaces
-pychromecast>=4.2
-PyQt5
-soco
+# Install the package and its headless dependencies.
+# Optional features: pip install '.[tray,sonos,youtube]' (GI needs OS typelibs).
+.
