@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from urllib.request import urlopen, Request
 
-from mkchromecast.stream_infra import FlaskServer, PipelineProcess
+from mkchromecast.stream_infra import FlaskServer, PipelineProcess, StreamingHTTPServer
 from mkchromecast.processes import PipelineError
 
 
@@ -65,6 +65,17 @@ class HTTPTests(unittest.TestCase):
 
 
 class SpawnServerTests(unittest.TestCase):
+    def test_bind_does_not_require_reverse_dns(self):
+        import flask
+        with patch('socket.getfqdn', side_effect=AssertionError('Reverse DNS must not block readiness')) as lookup:
+            server = StreamingHTTPServer('127.0.0.1', 0, flask.Flask('fixture'))
+            try:
+                self.assertGreater(server.server_port, 0)
+                self.assertEqual('127.0.0.1', server.server_name)
+                lookup.assert_not_called()
+            finally:
+                server.server_close()
+
     def test_real_http_head_and_range_and_port_release(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'fixture.mp4'

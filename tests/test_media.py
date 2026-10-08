@@ -53,7 +53,7 @@ class FFmpegTests(unittest.TestCase):
             subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=size=160x90:rate=5',
                             '-f', 'lavfi', '-i', 'sine=frequency=440', '-t', '0.6', '-c:v', 'libx264',
                             '-pix_fmt', 'yuv420p', '-c:a', 'aac', str(source)], check=True, timeout=20)
-            self.assertEqual(str(source), plan_media(settings(input_file=str(source))).direct_file)
+            self.assertEqual(str(source.resolve()), plan_media(settings(input_file=str(source))).direct_file)
             subtitle = Path(directory) / "a'b:[c],;.srt"
             subtitle.write_text('1\n00:00:00,000 --> 00:00:00,500\nHello\n')
             config = VideoSettings(display=':0', fps='5', input_file=str(source), loop=False,

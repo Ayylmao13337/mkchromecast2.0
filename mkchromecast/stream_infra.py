@@ -5,12 +5,13 @@ import os
 import queue
 import signal
 import shutil
+import socketserver
 import threading
 import time
 from typing import Callable, Optional, Union
 
 import flask
-from werkzeug.serving import make_server
+from werkzeug.serving import ThreadedWSGIServer
 
 from mkchromecast.processes import OwnedPipeline, PipelineError
 
@@ -171,6 +172,20 @@ class FlaskServer:
             FlaskServer._cleanup = None
 
 
+class StreamingHTTPServer(ThreadedWSGIServer):
+    """Bind without HTTPServer's unnecessary blocking reverse-DNS lookup.
+
+    The streaming URL already carries the selected interface address. Resolving
+    a display hostname can delay readiness on macOS and disconnected networks.
+    Keep Werkzeug's normal request handling, threading and socket activation.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = self.host
+        self.server_port = self.server_address[1]
+
+
 def _serve(flask_init, host, port, connection):
     """Spawn entrypoint; no inherited parser, Qt, GLib or socket state."""
     os.setsid()
@@ -181,7 +196,7 @@ def _serve(flask_init, host, port, connection):
             for command in (FlaskServer._producer, FlaskServer._command):
                 if command and shutil.which(command[0]) is None:
                     raise PipelineError(f"Required program is not installed: {command[0]}")
-        server = make_server(host, port, FlaskServer._app, threaded=True)
+        server = StreamingHTTPServer(host, port, FlaskServer._app)
         server.timeout = 0.2
         connection.send(("ready", server.server_port))
         while True:
