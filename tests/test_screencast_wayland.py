@@ -1,3 +1,5 @@
+import os
+import importlib.util
 import unittest
 from unittest import mock
 
@@ -64,6 +66,8 @@ class GstProbeTests(unittest.TestCase):
         self.assertTrue(missing)
 
 
+@unittest.skipIf(importlib.util.find_spec("gi") is None and not os.environ.get("MKCHROMECAST_REQUIRE_GI"),
+                 "Optional PyGObject missing; required in the wayland-bindings CI job")
 class PortalArgVariantTests(unittest.TestCase):
     """The portal method arguments must build as valid GVariants.
 

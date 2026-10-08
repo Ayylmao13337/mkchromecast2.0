@@ -3,6 +3,7 @@
 import configparser
 import os
 import pathlib
+import tempfile
 from typing import Optional
 
 # NOTE: Can't import mkchromecast because that would create a circular dependency.
@@ -31,11 +32,7 @@ def _default_config_path(platform: str) -> pathlib.Path:
             os.environ.get("XDG_CONFIG_HOME", "~/.config"))
         config_dir = xdg_config_home / "mkchromecast"
 
-    # TODO(xsdg): Switch this back to mkchromecast.cfg.
-    config_path = (config_dir / "mkchromecast_beta.cfg").expanduser()
-
-    print(f":::config::: WARNING: USING BETA CONFIG PATH: {config_path}")
-    return config_path
+    return (config_dir / "mkchromecast.cfg").expanduser()
 
 
 class Config:
@@ -60,7 +57,7 @@ class Config:
         self._read_only = read_only
 
         if config_path:
-            self._config_path = config_path
+            self._config_path = pathlib.Path(config_path)
         else:
             self._config_path = _default_config_path(self._platform)
 
@@ -87,56 +84,72 @@ class Config:
 
         return self
 
-    def __exit__(self, *exc):
-        self._maybe_write_config()
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type is None:
+            self.validate()
+            self._maybe_write_config()
 
     def load_and_validate(self) -> None:
         """Loads config from disk and validates that no settings are missing.
 
-        If any settings are missing, they are set to the default value, and if
-        this Config was not created read-only, the completed config will be
-        written back to disk.
+        Missing settings receive defaults in memory. A successful writable
+        context exit persists them atomically.
         """
-        self._config.read(self._config_path)
-        self._update_any_missing_values()
+        self._config.clear()
+        source = self._config_path
+        legacy = source.with_name("mkchromecast_beta.cfg")
+        if not source.exists() and source.name == "mkchromecast.cfg" and legacy.exists():
+            source = legacy
+        self._config.read(source)
+        if not self._config.has_section(SETTINGS):
+            self._config.add_section(SETTINGS)
+        for key, value in self._default_conf.items():
+            if not self._config.has_option(SETTINGS, key):
+                setattr(self, key, value)
+        self.validate()
+
+    def validate(self) -> None:
+        from mkchromecast.constants import ALL_CODECS, backend_options_for_platform
+        if self.backend not in backend_options_for_platform(self._platform):
+            raise ValueError(f"Unsupported audio backend in configuration: {self.backend}")
+        if self.codec not in ALL_CODECS:
+            raise ValueError(f"Unsupported codec in configuration: {self.codec}")
+        if self.bitrate <= 0 or not 22050 <= self.samplerate <= 192000:
+            raise ValueError("Configuration bitrate/sample rate is out of range")
+        if self.colors not in {"black", "blue", "white"}:
+            raise ValueError("Configuration icon color must be black, blue or white")
+        # Force ConfigParser's boolean validation, too.
+        _ = self.notifications, self.search_at_launch
+        if self.backend == "node" and self.codec != "mp3":
+            raise ValueError("The node backend only supports mp3")
+        if self.codec == "opus":
+            self.samplerate = 48000
+
+    def write_defaults(self) -> None:
+        self._config.clear()
+        self._config.add_section(SETTINGS)
+        for key, value in self._default_conf.items():
+            setattr(self, key, value)
+        self._maybe_write_config()
 
     def _maybe_write_config(self) -> None:
-        """Writes the config to config_file unless read-only mode was used."""
         if self._read_only:
             return
-
-        with open(self._config_path, "wt") as config_file:
-            self._config.write(config_file)
-
-    def _update_any_missing_values(self) -> None:
-        """Sets any missing values to their defaults."""
-        if not self._config.has_section(SETTINGS):
-            print(f":::config::: Creating missing section '{SETTINGS}'")
-            self._config.add_section(SETTINGS)
-
-        expected_keys = self._default_conf.keys()
-        missing_keys: list[str] = []
-        for key in expected_keys:
-            if not self._config.has_option(SETTINGS, key):
-                missing_keys.append(key)
-                if self._debug:
-                    print(f":::config::: Setting missing key {key} to default "
-                          "value.")
-
-                # We use setattr to avoid bypassing any validation code that
-                # might exist.
-                setattr(self, key, self._default_conf[key])
-
-        if missing_keys:
-            if self._read_only:
-                print(":::config::: Missing keys _not_ being saved for "
-                      "read-only config")
-            else:
-                if self._debug:
-                    print(":::config::: Re-writing config to add missing keys: "
-                          f"{missing_keys}")
-
-                self._maybe_write_config()
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self._config_path.parent,
+                prefix=".mkchromecast-", delete=False,
+            ) as output:
+                temporary = pathlib.Path(output.name)
+                self._config.write(output)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self._config_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     # TODO(xsdg): Refactor this to avoid code duplication.  Sadly,
     # functools.partialmethod doesn't work with properties.

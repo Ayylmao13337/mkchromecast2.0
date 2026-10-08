@@ -1,96 +1,70 @@
-# This file is part of mkchromecast.
-
+"""PulseAudio/pipewire-pulse routing, with per-session ownership."""
+import json
 import subprocess
-import time
-import re
+import uuid
 
-_sink_num = None
+
+class AudioSink:
+    def __init__(self):
+        self.name = "Mkchromecast_" + uuid.uuid4().hex[:12]
+        self.module = None
+
+    @property
+    def monitor(self):
+        return self.name + ".monitor"
+
+    def start(self):
+        result = subprocess.run(
+            ["pactl", "load-module", "module-null-sink", "sink_name=" + self.name,
+             "sink_properties=device.description=" + self.name,
+             "rate=44100", "channels=2"], capture_output=True, text=True,
+            timeout=15, check=True)
+        module = result.stdout.strip()
+        if not module.isdigit():
+            raise RuntimeError("pactl did not return a valid module ID")
+        self.module = module
+        return self
+
+    def close(self):
+        if self.module is None:
+            return
+        module, self.module = self.module, None
+        subprocess.run(["pactl", "unload-module", module], capture_output=True,
+                       timeout=10, check=True)
+
+
+# Compatibility helpers for external users of the old module. Normal sessions
+# own their AudioSink directly; reset is an explicit user action.
+_legacy_sink = None
 
 
 def create_sink():
-    global _sink_num
-
-    sink_name = "Mkchromecast"
-
-    create_sink = [
-        "pactl",
-        "load-module",
-        "module-null-sink",
-        "sink_name=" + sink_name,
-        "sink_properties=device.description=" + sink_name,
-    ]
-
-    cs = subprocess.Popen(create_sink, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    csoutput, cserror = cs.communicate()
-    _sink_num = csoutput[:-1]
-
-    return
+    global _legacy_sink
+    if _legacy_sink is None:
+        _legacy_sink = AudioSink().start()
+    return _legacy_sink
 
 
 def remove_sink():
-    global _sink_num
-
-    if _sink_num is None:
-        return
-
-    if not isinstance(_sink_num, list):
-        _sink_num = [_sink_num]
-
-    for num in _sink_num:
-        remove_sink = [
-            "pactl",
-            "unload-module",
-            num.decode("utf-8") if type(num) == bytes else str(num),
-        ]
-        rms = subprocess.run(
-            remove_sink,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=True,
-        )
+    global _legacy_sink
+    if _legacy_sink is not None:
+        sink, _legacy_sink = _legacy_sink, None
+        sink.close()
 
 
 def check_sink():
-    try:
-        check_sink = ["pactl", "list", "sinks"]
-        chk = subprocess.Popen(
-            check_sink, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        chkoutput, chkerror = chk.communicate()
-    except FileNotFoundError:
-        return None
-
-    try:
-        if "Mkchromecast" in chkoutput:
-            return True
-        else:
-            return False
-    except TypeError:
-        if "Mkchromecast" in chkoutput.decode("utf-8"):
-            return True
-        else:
-            return False
+    return _legacy_sink is not None
 
 
 def get_sink_list():
-    """Get a list of sinks with a name prefix of Mkchromecast and save to _sink_num.
+    result = subprocess.run(["pactl", "-f", "json", "list", "modules"],
+                            capture_output=True, text=True, timeout=15, check=True)
+    return [m["index"] for m in json.loads(result.stdout)
+            if m.get("name") == "module-null-sink"
+            and "sink_name=Mkchromecast" in m.get("argument", "")]
 
-    Used to clear any residual sinks from previous failed actions. The number
-    saved to _sink_num is the module index, which can be passed to pactl.
-    """
-    global _sink_num
 
-    cmd = ["pactl", "list", "sinks"]
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=True
-    )
-
-    pattern = re.compile(
-        r"^Sink\s*#\d+\s*$(?:\n^.*?$)*?\n\s*?Name:\s*?Mkchromecast.*"
-        + r"\s*?$(?:\n^.*?$)*?\n^\s*?Owner Module: (?P<module>\d+?)\s*?$",
-        re.MULTILINE,
-    )
-    matches = pattern.findall(result.stdout.decode("utf-8"), re.MULTILINE)
-
-    _sink_num = [int(i) for i in matches]
+def reset_sinks():
+    for module in get_sink_list():
+        subprocess.run(["pactl", "unload-module", str(module)], capture_output=True,
+                       timeout=10, check=True)

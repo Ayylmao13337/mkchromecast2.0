@@ -20,7 +20,7 @@ def invalid_arg(error_msg: str):
             ArgumentTypeError.
     """
 
-    def raise_arg_type_error():
+    def raise_arg_type_error(_value):
         raise argparse.ArgumentTypeError(error_msg)
     return raise_arg_type_error
 
@@ -43,7 +43,7 @@ Parser = argparse.ArgumentParser(
     whereas, installation from source needs users to go inside the cloned git
     repository and execute:
 
-        python mkchromecast.py
+        mkchromecast
 
     The two examples above will make Mkchromecast streams with node.js (or
     parec in Linux) together with mp3 audio coding format at a sample rate of
@@ -75,7 +75,7 @@ Parser.add_argument(
     ALSA in your system.
 
     Example:
-        python mkchromecast.py --encoder-backend ffmpeg --alsa-device hw:2,1
+        mkchromecast --encoder-backend ffmpeg --alsa-device hw:2,1
 
     It only works for the ffmpeg backend, and it is not useful for pulseaudio
     users. For more information read the README.Debian file shipped in the
@@ -95,10 +95,10 @@ Parser.add_argument(
     Example:
 
     ffmpeg:
-        python mkchromecast.py --encoder-backend ffmpeg -c ogg -b 128
+        mkchromecast --encoder-backend ffmpeg -c ogg -b 128
 
     node:
-        python mkchromecast.py  -b 128
+        mkchromecast  -b 128
 
     This option works with all backends. The example above sets the average
     bitrate to 128k.
@@ -108,7 +108,7 @@ Parser.add_argument(
 Parser.add_argument(
     "--chunk-size",
     type=int,
-    default="64",
+    default=64,
     help="""
     Set the chunk size base for streaming in the Flask server. Default to 64.
     This option only works when using the ffmpeg backend. This number is the
@@ -118,7 +118,7 @@ Parser.add_argument(
     Example:
 
     ffmpeg:
-        python mkchromecast.py --encoder-backend ffmpeg -c ogg -b 128 --chunk-size 2048
+        mkchromecast --encoder-backend ffmpeg -c ogg -b 128 --chunk-size 2048
 
     """,
 )
@@ -132,7 +132,7 @@ Parser.add_argument(
     Set the audio codec.
 
     Example:
-        python mkchromecast.py --encoder-backend ffmpeg -c ogg
+        mkchromecast --encoder-backend ffmpeg -c ogg
 
     Possible codecs:
         - mp3  [192k]   MPEG Audio Layer III (default)
@@ -220,7 +220,7 @@ Parser.add_argument(
         - ffmpeg
 
     Example:
-        python mkchromecast.py --encoder-backend ffmpeg
+        mkchromecast --encoder-backend ffmpeg
     """,
 )
 
@@ -244,7 +244,7 @@ Parser.add_argument(
     one network device available.
 
     Example:
-        python mkchromecast.py --encoder-backend ffmpeg --host 192.168.1.1
+        mkchromecast --encoder-backend ffmpeg --host 192.168.1.1
 
     You can pass it to all available backends.
     """,
@@ -259,7 +259,7 @@ _ActionGroup.add_argument(
     Stream a file.
 
     Example:
-        python mkchromecast.py -i /path/to/file.mp4
+        mkchromecast -i /path/to/file.mp4
     """,
 )
 
@@ -277,10 +277,9 @@ Parser.add_argument(
     type=str,
     default=None,
     help="""
-    Specify the media type for video streaming.
-
-    Example:
-        python mkchromecast.py --video -i "/path/to/file.avi" --mtype 'video/x-msvideo'
+    MIME type for --source-url or a custom --command. Generated media sets
+    its own type. Example: --source-url https://example.org/music.mp3
+    --mtype audio/mpeg
     """,
 )
 
@@ -294,7 +293,7 @@ Parser.add_argument(
     connect.
 
     Example:
-        python mkchromecast.py -n mychromecast
+        mkchromecast -n mychromecast
     """,
 )
 
@@ -310,14 +309,14 @@ Parser.add_argument(
     "-p",
     "--port",
     type=int,
-    default="5000",
+    default=5000,
     help="""
     Set the listening port for local webserver.
 
     Example:
 
     ffmpeg:
-        python mkchromecast.py --encoder-backend ffmpeg -p 5100
+        mkchromecast --encoder-backend ffmpeg -p 5100
 
     """,
 )
@@ -358,7 +357,7 @@ Parser.add_argument(
 Parser.add_argument(
     "--sample-rate",
     type=int,
-    default="44100",
+    default=44100,
     help="""
     Set the sample rate. The default sample rate obtained from avfoundation
     audio device input in ffmpeg using BlackHole for macOS is 44100Hz (in
@@ -374,10 +373,10 @@ Parser.add_argument(
     Example:
 
     ffmpeg:
-        python mkchromecast.py --encoder-backend ffmpeg -c ogg -b 128 --sample-rate 32000
+        mkchromecast --encoder-backend ffmpeg -c ogg -b 128 --sample-rate 32000
 
     node:
-        python mkchromecast.py -b 128 --sample-rate 32000
+        mkchromecast -b 128 --sample-rate 32000
 
     This option works for both backends. The example above sets the sample rate
     to 32000Hz, and the bitrate to 128k.
@@ -411,7 +410,7 @@ _ActionGroup.add_argument(
 
     Examples:
 
-        python mkchromecast.py --video --screencast
+        mkchromecast --video --screencast
     """,
 )
 
@@ -424,7 +423,7 @@ Parser.add_argument(
     HH:MM:SS.
 
     Example:
-        python mkchromecast.py --video -i "/path/to/file.mp4" --seek 00:23:00
+        mkchromecast --video -i "/path/to/file.mp4" --seek 00:23:00
 
     """,
 )
@@ -434,10 +433,8 @@ Parser.add_argument(
     type=int,
     default=None,
     help="""
-    Segmentate audio for improved live streaming when using ffmpeg.
-
-    Example:
-        python mkchromecast.py --encoder-backend ffmpeg --segment-time 2
+    Unsupported legacy option. The live HTTP pipeline does not implement
+    segmented streaming; supplying this option reports an error.
 
     """,
 )
@@ -453,13 +450,13 @@ _ActionGroup.add_argument(
     Example:
 
     Source URL, port and extension:
-        python mkchromecast.py --source-url http://192.99.131.205:8000/pvfm1.ogg -c ogg --control
+        mkchromecast --source-url http://192.99.131.205:8000/pvfm1.ogg -c ogg --control
 
     Source URL, no port, and extension:
-        python mkchromecast.py --source-url http://example.com/name.ogg -c ogg --control
+        mkchromecast --source-url http://example.com/name.ogg -c ogg --control
 
     Source URL without extension:
-        python mkchromecast.py --source-url http://example.com/name -c aac --control
+        mkchromecast --source-url http://example.com/name -c aac --control
 
     Supported source URLs are:
 
@@ -537,13 +534,13 @@ Parser.add_argument(
     Examples:
 
     Cast a file:
-        python mkchromecast.py --video -i "/path/to/file.mp4"
+        mkchromecast --video -i "/path/to/file.mp4"
 
     Cast from source-url:
-        python mkchromecast.py --source-url http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4 -c mp4 --control --video
+        mkchromecast --source-url http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4 -c mp4 --control --video
 
     Cast a youtube-url:
-        python mkchromecast.py -y https://www.youtube.com/watch\?v\=VuMBaAZn3II --video
+        mkchromecast -y https://www.youtube.com/watch\?v\=VuMBaAZn3II --video
 
     """,
 )
@@ -561,15 +558,15 @@ _ActionGroup.add_argument(
     help="""
     Stream from sources supported by yt-dlp. This option needs
     the yt-dlp package, and it also gives you access to all its
-    supported websites such as Dailymotion, LiveLeak, and Vimeo.
+    supported websites such as Dailymotion and Vimeo.
 
     For a comprehensive list, check:
-        http://rg3.github.io/yt-dlp/supportedsites.html.
+        https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md.
 
     Example:
-        python mkchromecast.py -y https://www.youtube.com/watch?v=NVvAJhZVBTc
+        mkchromecast -y https://www.youtube.com/watch?v=NVvAJhZVBTc
 
-    Note that this is only working for websites running over https.
+    HTTP and HTTPS URLs are accepted.
         """,
 )
 
@@ -581,3 +578,10 @@ Parser.add_argument(
     Frames per second to use when --screencast is used. Defaults to 25.
     """,
 )
+
+Parser.add_argument("--device-id", help="Stable Chromecast UUID or Sonos UID")
+Parser.add_argument("--receiver", choices=["chromecast", "sonos"], default="chromecast",
+                    help="Receiver family (Sonos requires the sonos extra)")
+Parser.add_argument("--discovery-timeout", type=float, default=10.0)
+Parser.add_argument("--startup-timeout", type=float, default=330.0,
+                    help="Startup deadline including any desktop portal prompt")

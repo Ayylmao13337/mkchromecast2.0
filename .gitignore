@@ -2,8 +2,12 @@
 *.pyc
 *.pc
 *.egg-info
-build
-dist
-install
-.idea
-**__pycache__
+build/
+dist/
+install/
+.idea/
+**/__pycache__/
+.venv/
+.coverage
+htmlcov/
+.ruff_cache/
