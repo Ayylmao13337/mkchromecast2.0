@@ -42,6 +42,17 @@ System dependencies are separate from Python packages:
 | Wayland screencast | PyGObject/Gio/GLib, xdg-desktop-portal and its desktop backend, PipeWire, GStreamer with pipewiresrc, x264enc, avenc_aac, h264parse, aacparse and mp4mux |
 | YouTube | `yt-dlp` on PATH; a JavaScript runtime supported by your installed yt-dlp may also be required |
 
+Subtitle burn-in needs FFmpeg's `subtitles` filter (libass). On macOS, use
+Homebrew's `ffmpeg-full` build and select its executables on PATH:
+
+```sh
+brew install ffmpeg-full
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+```
+
+The regular Homebrew `ffmpeg` formula does not include all optional libraries.
+See [Homebrew ffmpeg-full](https://formulae.brew.sh/formula/ffmpeg-full).
+
 For Wayland, install your distribution's PyGObject packages and use a venv with
 `--system-site-packages`, or build the optional `wayland` extra with the required
 native development libraries. `pip install` alone does not install a portal or

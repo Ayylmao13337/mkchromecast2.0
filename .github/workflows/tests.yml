@@ -20,7 +20,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
+      - name: Verify subtitle rendering support
+        run: python -c 'import subprocess; r = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True, check=True); assert any(line.split()[1:2] == ["subtitles"] for line in r.stdout.splitlines()), "FFmpeg must include the libass subtitles filter"'
       - run: python -m pip install '.[dev,tray,sonos]'
       - run: python -m coverage run --source=mkchromecast -m unittest discover -s tests
       - run: python -m coverage report
