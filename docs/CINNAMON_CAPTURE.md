@@ -37,6 +37,10 @@ Use `mkchromecast --discover` if you need the device ID. Route the application's
 audio to the MKChromecast output shown in the terminal/audio mixer, as with
 normal screen sharing. Press Ctrl-C to stop.
 
+To compare delay after capture works, add `--low-latency` to the command.
+See [the latency profile and measurements](LOW_LATENCY.md). The shorter-fragment
+profile is experimental and still needs TV playback and audio-sync testing.
+
 To compare against the existing capture path, stop casting and run the same
 command without `--capture-backend cinnamon`. The NVIDIA setting is never
 changed by MKChromecast. To return to the previously successful workaround:

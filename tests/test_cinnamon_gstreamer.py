@@ -18,6 +18,12 @@ from mkchromecast.constants import OpMode
 
 class CinnamonGStreamerTests(unittest.TestCase):
     def test_private_frames_reconnect_and_decode(self):
+        self._check_transport(False)
+
+    def test_low_latency_frames_reconnect_and_decode(self):
+        self._check_transport(True)
+
+    def _check_transport(self, low_latency):
         programs = ('gst-launch-1.0', 'gst-inspect-1.0', 'ffprobe', 'ffmpeg')
         missing = [p for p in programs if not shutil.which(p)]
         if missing:
@@ -41,7 +47,7 @@ class CinnamonGStreamerTests(unittest.TestCase):
                     time.sleep(.05)
                 settings = VideoSettings(None, '25', None, False, OpMode.SCREENCAST,
                                          '480p', True, None, None, None, 'libx264', None,
-                                         cinnamon_capture=socket_path)
+                                         cinnamon_capture=socket_path, low_latency=low_latency)
                 command = Video(settings).command
                 # Use a clocked synthetic audio source instead of a real sound server.
                 audio = command.index('pulsesrc')

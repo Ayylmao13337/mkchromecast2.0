@@ -102,6 +102,7 @@ class Mkchromecast:
 
         self.screencast: bool = args.screencast
         self.capture_backend = args.capture_backend
+        self.low_latency = args.low_latency
         self.display: Optional[str] = args.display
         self.vcodec: str = args.vcodec
         self.loop: bool = args.loop
@@ -275,6 +276,11 @@ class Mkchromecast:
             self._fatal_error("Screen capture currently supports Linux only")
         if self.screencast and not self.videoarg:
             self._fatal_error("--screencast requires --video")
+        if self.low_latency:
+            if not self.screencast:
+                self._fatal_error("--low-latency requires --video --screencast")
+            if self.vcodec not in {"libx264", "h264_nvenc"}:
+                self._fatal_error("--low-latency supports libx264 or h264_nvenc only")
         if self.capture_backend == "cinnamon":
             if not self.screencast:
                 self._fatal_error("--capture-backend cinnamon requires --video --screencast")

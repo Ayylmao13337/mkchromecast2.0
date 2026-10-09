@@ -420,6 +420,12 @@ Parser.add_argument(
 )
 
 Parser.add_argument(
+    "--low-latency", action="store_true",
+    help="Experimental screencast profile: shorter video fragments and keyframe intervals. "
+         "May increase bandwidth and sensitivity to network jitter.",
+)
+
+Parser.add_argument(
     "--seek",
     type=str,
     default=None,

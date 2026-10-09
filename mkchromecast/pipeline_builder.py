@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from typing import Optional, Union
 from fractions import Fraction
+import math
 
 import mkchromecast
 from mkchromecast import colors
@@ -224,6 +225,7 @@ class VideoSettings:
     wayland_capture: Optional[tuple[int, int]] = None
     copy_video: bool = False
     cinnamon_capture: Optional[str] = None
+    low_latency: bool = False
 
 
 class Video:
@@ -282,6 +284,8 @@ class Video:
         else:
             maybe_veryfast_cmd = []
 
+        keyframes = str(max(1, math.ceil(float(self._settings.fps) / 2))) if self._settings.low_latency else "60"
+
         return ["ffmpeg",
                 "-ac", "2",
                 "-ar", "44100",
@@ -299,10 +303,12 @@ class Video:
                 "-maxrate", "10000k",
                 "-bufsize", "20000k",
                 "-pix_fmt", "yuv420p",
-                "-g", "60",  # '-c:a', 'copy', '-ac', '2',
-                # '-b', '900k',
+                "-g", keyframes,
+                *(["-bf", "0"] if self._settings.low_latency else []),
                 "-f", "mp4",
                 "-movflags", "frag_keyframe+empty_moov",
+                *(["-frag_duration", "250000", "-flush_packets", "1"]
+                  if self._settings.low_latency else []),
                 "-ar", "44100",
                 "-acodec", "aac",
                 "pipe:1",
@@ -323,8 +329,15 @@ class Video:
     def _gst_screencast_command(self, source) -> list[str]:
         """Shared H.264/AAC encoding for compositor-provided video frames."""
         fps = str(self._settings.fps)
-        key_int_max = str(max(1, round(float(fps) * 2)))
+        low_latency = self._settings.low_latency
+        key_int_max = str(max(1, math.ceil(float(fps) / 2) if low_latency else round(float(fps) * 2)))
         frame_rate = Fraction(fps).limit_denominator(1001)
+        fragment_ms = 250 if low_latency else 1000
+        # Dropping raw frames is safe; dropping encoded H.264 packets is not.
+        raw_queue = (["!", "queue", "max-size-buffers=2", "max-size-bytes=0",
+                      "max-size-time=0", "leaky=downstream"] if low_latency else [])
+        encoded_queue = (["max-size-time=250000000", "max-size-buffers=0",
+                          "max-size-bytes=0"] if low_latency else [])
 
         # Chromecast needs H.264 High profile, 4:2:0 (yuv420p / I420), at a
         # supported resolution. videoconvert otherwise negotiates 4:4:4 (which
@@ -345,12 +358,13 @@ class Video:
             "!", "videorate",
             "!", (f"video/x-raw,format=I420,width={width},height={height},"
                   f"framerate={frame_rate.numerator}/{frame_rate.denominator}"),
+            *raw_queue,
             "!", "x264enc", "tune=zerolatency", "speed-preset=veryfast",
             "bitrate=8000", f"key-int-max={key_int_max}",
             "!", "video/x-h264,profile=high",
             "!", "h264parse",
-            "!", "queue",
-            "!", "mp4mux", "name=mux", "fragment-duration=1000",
+            "!", "queue", *encoded_queue,
+            "!", "mp4mux", "name=mux", f"fragment-duration={fragment_ms}",
             "streamable=true",
             "!", "fdsink", "fd=1",
             "pulsesrc", "device=Mkchromecast.monitor",
@@ -358,7 +372,7 @@ class Video:
             "!", "audioresample",
             "!", "avenc_aac",
             "!", "aacparse",
-            "!", "queue",
+            "!", "queue", *encoded_queue,
             "!", "mux.",
         ]
 

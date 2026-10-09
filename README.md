@@ -13,6 +13,11 @@ an opt-in [experimental Cinnamon capture backend](docs/CINNAMON_CAPTURE.md)
 is available via `--video --screencast --capture-backend cinnamon`.
 It still needs validation on the target desktop and Chromecast.
 
+For screen-sharing delay, try the optional [low-latency profile](docs/LOW_LATENCY.md)
+with `--video --screencast --low-latency`. A separate
+[Cast Streaming assessment](docs/CAST_STREAMING.md) covers the path toward
+Chromium-style mirroring; that transport is not implemented yet.
+
 ## Install from this checkout
 
 Requires Python 3.11 or newer on Linux or macOS. Windows is not supported.

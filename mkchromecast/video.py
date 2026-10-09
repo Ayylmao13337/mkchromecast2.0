@@ -65,6 +65,7 @@ def _build_video_settings(mkcc, wayland_capture):
         youtube_url=mkcc.youtube_url,
         wayland_capture=wayland_capture,
         copy_video=getattr(mkcc, "copy_video", False),
+        low_latency=getattr(mkcc, "low_latency", False),
     )
 
 
