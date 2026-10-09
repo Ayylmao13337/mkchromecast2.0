@@ -6,10 +6,23 @@ function mkchromecastCapture(config) {
     const Main = imports.ui.main;
     const slot = '_mkchromecastCaptureV1';
     let state = global[slot];
-    const monitorKey = () => {
-        const m = Main.layoutManager.primaryMonitor;
-        return m ? JSON.stringify([m.x, m.y, m.width, m.height]) : null;
+    const selectMonitor = (id) => {
+        if (id === null || id === undefined || id === 'primary')
+            return Main.layoutManager.primaryMonitor;
+        return Main.layoutManager.monitors.find(m => String(m.index) === String(id));
     };
+    const monitorKey = () => {
+        const m = selectMonitor(state ? state.screen : config.screen);
+        return m ? JSON.stringify([m.index, m.name, m.x, m.y, m.width, m.height]) : null;
+    };
+
+    if (config.action === 'list') {
+        return Main.layoutManager.monitors.map(m => ({
+            id: String(m.index), name: m.name || 'Screen ' + m.index,
+            x: m.x, y: m.y, width: m.width, height: m.height,
+            primary: m.index === Main.layoutManager.primaryMonitor.index,
+        }));
+    }
 
     function stop() {
         if (!state)
@@ -31,16 +44,17 @@ function mkchromecastCapture(config) {
         if (state)
             throw new Error('Another MKChromecast Cinnamon capture is active');
         const Cinnamon = imports.gi.Cinnamon;
-        const monitor = Main.layoutManager.primaryMonitor;
+        const monitor = selectMonitor(config.screen);
         if (!monitor)
-            throw new Error('Cinnamon has no primary monitor');
+            throw new Error('Screen not found; run --list-screens --capture-backend cinnamon');
         const recorder = new Cinnamon.Recorder({stage: global.stage, display: global.display});
         recorder.set_framerate(config.fps);
         recorder.set_area(monitor.x, monitor.y, monitor.width, monitor.height);
         recorder.set_pipeline(config.pipeline);
-        state = {token: config.token, recorder: recorder, timer: 0,
+        state = {token: config.token, recorder: recorder, timer: 0, screen: config.screen,
                  expires: GLib.get_monotonic_time() + 20000000,
-                 monitor: monitorKey()};
+                 monitor: null};
+        state.monitor = monitorKey();
         global[slot] = state;
         try {
             const result = recorder.record();
@@ -74,7 +88,7 @@ function mkchromecastCapture(config) {
     if (config.action === 'heartbeat') {
         if (!state.recorder.is_recording() || monitorKey() !== state.monitor) {
             stop();
-            throw new Error('Cinnamon capture stopped or the primary monitor changed');
+            throw new Error('Cinnamon capture stopped or the selected monitor changed');
         }
         state.expires = GLib.get_monotonic_time() + 20000000;
         return true;

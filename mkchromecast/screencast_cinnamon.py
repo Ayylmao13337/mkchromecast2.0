@@ -90,7 +90,8 @@ class CinnamonCaptureSession:
     stopping/killing that process therefore expires the lease automatically.
     """
 
-    def __init__(self, fps, output_resolution=None):
+    def __init__(self, fps, output_resolution=None, screen=None):
+        self.screen = screen
         self.fps = int(float(fps))
         if self.fps != float(fps) or not 1 <= self.fps <= 60:
             raise CinnamonError("Cinnamon capture requires integer FPS from 1 to 60")
@@ -126,7 +127,7 @@ class CinnamonCaptureSession:
         )
         self._attempted = True
         try:
-            self._call("start", fps=self.fps, pipeline=pipeline)
+            self._call("start", fps=self.fps, pipeline=pipeline, screen=self.screen)
             deadline = time.monotonic() + 5
             while not Path(socket_path).exists():
                 if time.monotonic() >= deadline:

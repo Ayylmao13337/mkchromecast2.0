@@ -226,6 +226,7 @@ class VideoSettings:
     copy_video: bool = False
     cinnamon_capture: Optional[str] = None
     low_latency: bool = False
+    x11_capture: Optional[tuple[int, int, int, int]] = None
 
 
 class Video:
@@ -285,6 +286,15 @@ class Video:
             maybe_veryfast_cmd = []
 
         keyframes = str(max(1, math.ceil(float(self._settings.fps) / 2))) if self._settings.low_latency else "60"
+        source_size = screen_size
+        x, y = 0, 0
+        filters = []
+        if self._settings.x11_capture is not None:
+            x, y, width, height = self._settings.x11_capture
+            source_size = f"{width}x{height}"
+            target_width, target_height = screen_size.split("x")
+            filters = ["-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                       f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1"]
 
         return ["ffmpeg",
                 "-ac", "2",
@@ -295,8 +305,9 @@ class Video:
                 "-i", "Mkchromecast.monitor",
                 "-f", "x11grab",
                 "-r", self._settings.fps,
-                "-s", screen_size,
-                "-i", "{}+0,0".format(self._settings.display),
+                "-s", source_size,
+                "-i", f"{self._settings.display}+{x},{y}",
+                *filters,
                 "-vcodec", self._settings.vcodec,
                 *maybe_veryfast_cmd,
                 "-tune", "ll" if self._settings.vcodec == "h264_nvenc" else "zerolatency",

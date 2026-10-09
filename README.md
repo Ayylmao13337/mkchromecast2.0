@@ -18,6 +18,10 @@ with `--video --screencast --low-latency`. A separate
 [Cast Streaming assessment](docs/CAST_STREAMING.md) covers the path toward
 Chromium-style mirroring; that transport is not implemented yet.
 
+Use `--list-screens` and `--screen` to choose a monitor, or `--diagnose` for
+read-only local checks. For Cinnamon, add `--capture-backend cinnamon` to the
+listing/diagnostic command. See [screen selection and diagnostics](docs/DIAGNOSTICS.md).
+
 ## Install from this checkout
 
 Requires Python 3.11 or newer on Linux or macOS. Windows is not supported.

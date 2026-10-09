@@ -103,6 +103,7 @@ class Mkchromecast:
         self.screencast: bool = args.screencast
         self.capture_backend = args.capture_backend
         self.low_latency = args.low_latency
+        self.screen = args.screen
         self.display: Optional[str] = args.display
         self.vcodec: str = args.vcodec
         self.loop: bool = args.loop
@@ -276,6 +277,8 @@ class Mkchromecast:
             self._fatal_error("Screen capture currently supports Linux only")
         if self.screencast and not self.videoarg:
             self._fatal_error("--screencast requires --video")
+        if self.screen is not None and not self.screencast:
+            self._fatal_error("--screen requires --video --screencast; use --list-screens to find IDs")
         if self.low_latency:
             if not self.screencast:
                 self._fatal_error("--low-latency requires --video --screencast")

@@ -56,7 +56,7 @@ For future testing, open a terminal in this test directory and run
 
 1. Calls Cinnamon's `org.Cinnamon.Eval` session D-Bus interface to instantiate a
    separate `Cinnamon.Recorder` using the compositor's stage capture.
-2. Captures the **primary monitor**, including its actual X/Y offset. Scales to
+2. Captures the **selected monitor** (primary by default), including its actual X/Y offset. Scales to
    the requested resolution with aspect-ratio padding and converts to I420.
 3. Passes raw frames through GStreamer's `shmsink`/`shmsrc` inside a private 0700
    temporary directory with 0600 shared-memory permissions. No new network
@@ -81,8 +81,9 @@ also leave GStreamer shared-memory remnants; log out/in if necessary.
 
 - Prototype for the Cinnamon **6.4 API**, inspected at tag 6.4.14. Eval and
   Recorder are desktop-specific interfaces, not a stable cross-desktop portal.
-- Captures the primary monitor; no monitor picker yet. Restart casting after
-  changing primary monitor or resolution.
+- Supports `--screen` with the ID from `--list-screens --capture-backend cinnamon`,
+  or `--screen primary`. See [screen selection](DIAGNOSTICS.md). Restart casting
+  after changing monitor layout or resolution. Window selection is not implemented.
 - Integer FPS from 1 to 60; H.264 software encoding only. `h264_nvenc` and ALSA
   input are rejected for this backend. Try 15 FPS or 720p if CPU usage is high.
 - Receiver pause does not suspend the capture process, so its ownership lease
