@@ -53,7 +53,10 @@ def _evaluate(script):
         result = subprocess.run([
             "gdbus", "call", "--session", "--dest", "org.Cinnamon",
             "--object-path", "/org/Cinnamon", "--method", "org.Cinnamon.Eval",
-            script,
+            # gdbus expects a GVariant string, not a raw JS argument. Its
+            # fallback only escapes double quotes, corrupting existing JS/JSON
+            # backslash escapes (notably the quoted shmsink socket path).
+            json.dumps(script, ensure_ascii=False),
         ], capture_output=True, text=True, timeout=5, check=True)
         # gdbus prints a (boolean, string) GVariant. Only translate its leading
         # boolean; never replace text inside the JSON payload.
@@ -69,7 +72,12 @@ def _evaluate(script):
         if isinstance(response, dict) and "error" in response:
             raise CinnamonError(response["error"])
         return response
-    except (subprocess.SubprocessError, OSError, ValueError, SyntaxError) as exc:
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or f"gdbus exited with status {exc.returncode}"
+        raise CinnamonError("Cinnamon D-Bus call failed: " + detail[-2000:]) from None
+    except subprocess.TimeoutExpired:
+        raise CinnamonError("Cinnamon D-Bus call timed out after 5 seconds") from None
+    except (OSError, ValueError, SyntaxError) as exc:
         raise CinnamonError(
             "Cannot use Cinnamon's capture API. This experimental backend targets "
             "Cinnamon 6.4 on X11; see docs/CINNAMON_CAPTURE.md. " + str(exc)) from exc

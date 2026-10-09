@@ -1,4 +1,6 @@
 import json
+import ctypes
+import ctypes.util
 from pathlib import Path
 import shutil
 import subprocess
@@ -65,6 +67,49 @@ class CinnamonTests(unittest.TestCase):
             session.close()
         self.assertEqual([c.args[0] for c in calls.call_args_list], ['start', 'stop'])
         self.assertFalse(paths[0].exists())
+
+    def test_dbus_error_shows_stderr_without_dumping_script(self):
+        error = subprocess.CalledProcessError(1, ['gdbus', 'PRIVATE_SCRIPT'],
+                                               stderr='Error: service unavailable')
+        with patch.object(capture.subprocess, 'run', side_effect=error):
+            with self.assertRaises(capture.CinnamonError) as caught:
+                capture._evaluate('PRIVATE_SCRIPT')
+        self.assertIn('service unavailable', str(caught.exception))
+        self.assertNotIn('PRIVATE_SCRIPT', str(caught.exception))
+        with patch.object(capture.subprocess, 'run', side_effect=subprocess.TimeoutExpired(
+                ['gdbus', 'PRIVATE_SCRIPT'], 5)):
+            with self.assertRaisesRegex(capture.CinnamonError, '^Cinnamon D-Bus call timed out after 5 seconds$'):
+                capture._evaluate('PRIVATE_SCRIPT')
+
+    def test_real_glib_parses_complete_script_without_changing_it(self):
+        library = ctypes.util.find_library('glib-2.0')
+        if not library:
+            self.skipTest('GLib is not installed')
+        lib = ctypes.CDLL(library)
+        lib.g_variant_parse.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                                        ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        lib.g_variant_parse.restype = ctypes.c_void_p
+        lib.g_variant_get_string.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        lib.g_variant_get_string.restype = ctypes.c_char_p
+        lib.g_variant_unref.argtypes = [ctypes.c_void_p]
+        lib.g_error_free.argtypes = [ctypes.c_void_p]
+        session = capture.CinnamonCaptureSession(25)
+        with patch.object(capture, '_evaluate') as evaluate:
+            session._call('start', fps=25, pipeline='shmsink socket-path="/tmp/quoted path/frames"')
+        script = evaluate.call_args.args[0]
+        with patch.object(capture.subprocess, 'run', return_value=Mock(stdout="(true, 'true')")) as run:
+            capture._evaluate(script)
+        argument = run.call_args.args[0][-1]
+        error = ctypes.c_void_p()
+        value = lib.g_variant_parse(b's', argument.encode(), None, None, ctypes.byref(error))
+        try:
+            self.assertTrue(value, 'gdbus argument must be valid GVariant string syntax')
+            self.assertEqual(lib.g_variant_get_string(value, None).decode(), script)
+        finally:
+            if value:
+                lib.g_variant_unref(value)
+            if error:
+                lib.g_error_free(error)
 
     def test_heartbeat_failure_is_not_silenced(self):
         session = capture.CinnamonCaptureSession(25)
