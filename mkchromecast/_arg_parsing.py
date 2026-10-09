@@ -415,6 +415,11 @@ _ActionGroup.add_argument(
 )
 
 Parser.add_argument(
+    "--capture-backend", choices=("auto", "cinnamon"), default="auto",
+    help="Screen capture: auto (X11/Wayland) or experimental Cinnamon compositor capture.",
+)
+
+Parser.add_argument(
     "--seek",
     type=str,
     default=None,

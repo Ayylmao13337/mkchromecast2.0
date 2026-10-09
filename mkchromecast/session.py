@@ -102,12 +102,14 @@ class CastSession:
 
     def pause(self):
         self.receiver.pause()
-        if self.pipeline and self.settings.videoarg:
+        if (self.pipeline and self.settings.videoarg
+                and getattr(self.settings, "capture_backend", "auto") != "cinnamon"):
             self.pipeline.pause()
         self.state = "paused"
 
     def resume(self):
-        if self.pipeline and self.settings.videoarg:
+        if (self.pipeline and self.settings.videoarg
+                and getattr(self.settings, "capture_backend", "auto") != "cinnamon"):
             self.pipeline.resume()
         self.receiver.play()
         self.state = "playing"

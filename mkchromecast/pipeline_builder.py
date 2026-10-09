@@ -223,6 +223,7 @@ class VideoSettings:
     youtube_url: Optional[str]
     wayland_capture: Optional[tuple[int, int]] = None
     copy_video: bool = False
+    cinnamon_capture: Optional[str] = None
 
 
 class Video:
@@ -254,6 +255,15 @@ class Video:
                         f"{self._settings.operation}")
 
     def _screencast_command(self) -> list[str]:
+        if self._settings.cinnamon_capture is not None:
+            size = resolution.resolution(self._settings.resolution or "1080p", True)
+            width, height = size.split("x")
+            return self._gst_screencast_command([
+                "shmsrc", "socket-path=" + self._settings.cinnamon_capture,
+                "is-live=true", "do-timestamp=true", "!",
+                (f"video/x-raw,format=I420,width={width},height={height},"
+                 f"framerate={int(float(self._settings.fps))}/1,pixel-aspect-ratio=1/1"),
+            ])
         # Wayland can't be grabbed with x11grab; capture via the portal +
         # PipeWire using a GStreamer pipeline instead. The X11 path is unchanged.
         if self._settings.wayland_capture is not None:
@@ -306,6 +316,12 @@ class Video:
         and muxes a fragmented MP4 to stdout (fd 1) for the Flask server to relay.
         """
         fd, node = self._settings.wayland_capture
+        return self._gst_screencast_command([
+            "pipewiresrc", f"fd={fd}", f"path={node}", "do-timestamp=true",
+        ])
+
+    def _gst_screencast_command(self, source) -> list[str]:
+        """Shared H.264/AAC encoding for compositor-provided video frames."""
         fps = str(self._settings.fps)
         key_int_max = str(max(1, round(float(fps) * 2)))
         frame_rate = Fraction(fps).limit_denominator(1001)
@@ -323,7 +339,7 @@ class Video:
 
         return [
             "gst-launch-1.0", "-q",
-            "pipewiresrc", f"fd={fd}", f"path={node}", "do-timestamp=true",
+            *source,
             "!", "videoconvert",
             "!", "videoscale",
             "!", "videorate",

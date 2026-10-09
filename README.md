@@ -8,6 +8,11 @@ It is not yet a hardware-certified stable 2.0 release.
 [Implementation status and release gates](docs/MODERNIZATION.md) ·
 [Prioritized tasks](docs/ROADMAP.md) · [License](LICENSE)
 
+For NVIDIA/Cinnamon X11 screen-capture flicker with Allow Flipping enabled,
+an opt-in [experimental Cinnamon capture backend](docs/CINNAMON_CAPTURE.md)
+is available via `--video --screencast --capture-backend cinnamon`.
+It still needs validation on the target desktop and Chromecast.
+
 ## Install from this checkout
 
 Requires Python 3.11 or newer on Linux or macOS. Windows is not supported.

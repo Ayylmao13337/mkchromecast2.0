@@ -5,6 +5,7 @@ Google Cast device has to point out to http://ip:5000/stream
 """
 
 from functools import partial
+from dataclasses import replace
 import os
 
 import mkchromecast
@@ -77,6 +78,27 @@ def _flask_init(mkcc=None):
         return
 
     if (mkcc.operation == OpMode.SCREENCAST
+            and getattr(mkcc, "capture_backend", "auto") == "cinnamon"):
+        from mkchromecast.screencast_cinnamon import CinnamonCaptureSession
+        capture = CinnamonCaptureSession(mkcc.fps, mkcc.resolution)
+        try:
+            socket_path = capture.open()
+            settings = replace(_build_video_settings(mkcc, None), cinnamon_capture=socket_path)
+            command = pipeline_builder.Video(settings).command
+            command = ["device=" + getattr(mkcc, "capture_device", "Mkchromecast.monitor")
+                       if value == "device=Mkchromecast.monitor" else value for value in command]
+            if mkcc.debug:
+                print(f":::cinnamon::: pipeline_builder command: {command}")
+            stream_infra.FlaskServer.init_video(
+                chunk_size=mkcc.chunk_size, command=command,
+                media_type="video/mp4", cleanup=capture.close, health_check=capture.check,
+            )
+        except BaseException:
+            capture.close()
+            raise
+        return
+
+    if (mkcc.operation == OpMode.SCREENCAST
             and screencast_wayland.is_wayland_session()):
         try:
             _active_wayland_session = (
@@ -134,6 +156,9 @@ def _flask_init(mkcc=None):
 
 def main(mkcc=None, cancel=None):
     mkcc = mkcc or mkchromecast.Mkchromecast()
+    if getattr(mkcc, "capture_backend", "auto") == "cinnamon":
+        from mkchromecast.screencast_cinnamon import preflight
+        preflight()
     wayland_screencast_preflight(mkcc)
     if (mkcc.operation == OpMode.SCREENCAST
             and screencast_wayland.is_wayland_session() and mkcc.vcodec != "libx264"):
