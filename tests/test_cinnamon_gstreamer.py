@@ -78,9 +78,10 @@ class CinnamonGStreamerTests(unittest.TestCase):
                                            capture_output=True, text=True, timeout=10, check=True)
                     streams = json.loads(probe.stdout)['streams']
                     self.assertEqual({s['codec_name'] for s in streams}, {'h264', 'aac'})
-                    subprocess.run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(output),
-                                    '-t', '.2', '-f', 'null', '-'],
-                                   capture_output=True, timeout=10, check=True)
+                    decoded = subprocess.run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(output),
+                                              '-t', '0.2', '-f', 'null', '-'],
+                                             capture_output=True, text=True, timeout=10)
+                    self.assertEqual(decoded.returncode, 0, decoded.stderr)
                     self.assertIsNone(writer.poll())
             finally:
                 writer.terminate()
