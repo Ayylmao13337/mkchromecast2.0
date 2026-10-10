@@ -125,7 +125,7 @@ class ScreenTests(unittest.TestCase):
                 screens, 'capture_backend', return_value='cinnamon'), patch.object(
                 diagnostics.shutil, 'which', return_value='/bin/tool'), patch.object(
                 screens, 'list_screens', return_value=[{'id': '0'}]), patch.object(
-                diagnostics.subprocess, 'run', return_value=Mock(returncode=0)) as run:
+                diagnostics.subprocess, 'run', return_value=Mock(returncode=0, stdout='[]')) as run:
             report = diagnostics.collect('cinnamon')
         names = {check['name'] for check in report['checks']}
         self.assertIn('gst:shmsrc', names)

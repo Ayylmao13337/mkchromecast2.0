@@ -115,3 +115,72 @@ class TrayTests(unittest.TestCase):
         self.addCleanup(window.tray.hide)
         self.addCleanup(window.close)
         self.assertEqual(1, window.panel.mode.count())
+
+    def test_gui_preferences_survive_restart_and_invalid_fps_is_safe(self):
+        from mkchromecast.systray import menubar
+        from mkchromecast import gui_settings
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        panel = window.panel
+        panel.mode.setCurrentIndex(1)
+        panel.backend.setCurrentIndex(1)
+        panel.screen.addItem('External', '1')
+        panel.screen.setCurrentIndex(1)
+        panel.latency.setChecked(True)
+        panel.fps.setValue(30)
+        saved = gui_settings.load('Linux')
+        self.assertEqual('1', saved['screen'])
+        saved['fps'] = 'corrupt'
+        gui_settings.save('Linux', saved)
+        other = menubar(self.settings)
+        self.addCleanup(other.tray.hide)
+        self.addCleanup(other.close)
+        self.assertEqual('cinnamon', other.panel.backend.currentData())
+        self.assertEqual('1', other.panel.screen.currentData())
+        self.assertTrue(other.panel.latency.isChecked())
+        self.assertEqual(25, other.panel.fps.value())
+
+    def test_retry_waits_for_current_session_to_stop(self):
+        from types import SimpleNamespace
+        from mkchromecast.systray import menubar
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        device = SimpleNamespace(id='id', name='TV')
+        window._last_device = device
+        with patch.object(window._play_thread, 'isRunning', return_value=True), patch.object(
+                window._player, 'stop') as stop, patch.object(window, '_start_device') as start:
+            window.retry_connection()
+            stop.assert_called_once()
+            start.assert_not_called()
+            window._play_finished()
+            start.assert_called_once_with(device)
+
+    def test_missing_saved_screen_is_not_silently_replaced(self):
+        import json
+        from mkchromecast.systray import menubar
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        panel = window.panel
+        panel.screen.addItem('Old monitor', 'gone')
+        panel.screen.setCurrentIndex(panel.screen.count() - 1)
+        panel._checked_backend = panel.backend.currentData()
+        with patch.object(panel, 'process') as process:
+            process.readAllStandardOutput.return_value = json.dumps(
+                {'scope': 'Local', 'checks': [], 'screens': []}).encode()
+            panel._diagnosed()
+        self.assertEqual('gone', panel.screen.currentData())
+        self.assertIn('unavailable', panel.screen.currentText())
+
+    def test_connection_notice_keeps_retry_available(self):
+        from mkchromecast.systray import menubar
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        window.connection_changed(False)
+        self.assertIn('lost', window.panel.status.text())
+        self.assertTrue(window.panel.retry.isEnabled())
+        window.connection_changed(True)
+        self.assertIn('restored', window.panel.status.text())

@@ -5,6 +5,7 @@ import sys
 
 from PyQt5 import QtCore, QtWidgets
 
+from mkchromecast import gui_settings
 from mkchromecast.screencast_wayland import is_wayland_session
 
 
@@ -61,6 +62,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.latency = QtWidgets.QCheckBox("Reduce streaming delay")
         self.latency.setToolTip("Smaller video fragments. Chromecast buffering still adds delay.")
         form.addRow("Low latency", self.latency)
+        self.audio = QtWidgets.QComboBox()
+        self.audio.addItem("Application routing (audio mixer)", None)
+        self.audio.setEnabled(controller.settings.platform == "Linux")
+        form.addRow("Audio source", self.audio)
         layout.addWidget(self.options)
         self.mode.currentIndexChanged.connect(self._mode_changed)
         self.backend.currentIndexChanged.connect(self._reset_screens)
@@ -75,6 +80,10 @@ class ControlPanel(QtWidgets.QWidget):
         self.stop.clicked.connect(controller.stop_cast)
         row.addWidget(self.start)
         row.addWidget(self.stop)
+        self.retry = QtWidgets.QPushButton("Retry connection")
+        self.retry.setEnabled(False)
+        self.retry.clicked.connect(controller.retry_connection)
+        row.addWidget(self.retry)
         layout.addLayout(row)
         self.check = QtWidgets.QPushButton("Check setup / refresh screens")
         self.check.clicked.connect(self.diagnose)
@@ -94,6 +103,40 @@ class ControlPanel(QtWidgets.QWidget):
         footer = QtWidgets.QLabel("Closing this window keeps MKChromecast in the system tray. Use Quit to exit.")
         footer.setWordWrap(True)
         layout.addWidget(footer)
+        self._restore()
+        for combo in (self.mode, self.backend, self.screen, self.resolution, self.audio):
+            combo.currentIndexChanged.connect(self._save)
+        self.fps.valueChanged.connect(self._save)
+        self.latency.toggled.connect(self._save)
+
+    def _restore(self):
+        saved = gui_settings.load(self.controller.settings.platform)
+        for widget, key in ((self.mode, "mode"), (self.backend, "backend")):
+            index = widget.findData(saved.get(key))
+            if index >= 0:
+                widget.setCurrentIndex(index)
+        if saved.get("resolution") in ("720p", "1080p"):
+            self.resolution.setCurrentText(saved["resolution"])
+        fps = saved.get("fps", 25)
+        self.fps.setValue(fps if type(fps) is int and 1 <= fps <= 60 else 25)
+        self.latency.setChecked(saved.get("latency") is True)
+        for widget, key in ((self.screen, "screen"), (self.audio, "audio")):
+            value = saved.get(key)
+            if isinstance(value, str) and widget.findData(value) < 0:
+                widget.addItem(value + " (saved; refresh to verify)", value)
+            index = widget.findData(value)
+            if index >= 0:
+                widget.setCurrentIndex(index)
+
+    def _save(self, *_):
+        try:
+            gui_settings.save(self.controller.settings.platform, dict(
+                mode=self.mode.currentData(), backend=self.backend.currentData(),
+                screen=self.screen.currentData(), audio=self.audio.currentData(),
+                resolution=self.resolution.currentText(), fps=self.fps.value(),
+                latency=self.latency.isChecked()))
+        except OSError as exc:
+            self.report.setPlainText("Could not save settings: " + str(exc))
 
     def _reset_screens(self):
         self.screen.clear()
@@ -170,14 +213,31 @@ class ControlPanel(QtWidgets.QWidget):
                 state = "OK" if check["ok"] is True else "FAIL" if check["ok"] is False else "NOT TESTED"
                 lines.append(f"{state} — {check['name']}: {check['detail']}")
             self.report.setPlainText("\n".join(lines))
+            audio = self.audio.currentData()
+            self.audio.blockSignals(True)
+            self.audio.clear()
+            self.audio.addItem("Application routing (audio mixer)", None)
+            for source in report.get("audio_sources", []):
+                self.audio.addItem(source["description"], source["name"])
+            index = self.audio.findData(audio)
+            if index < 0 and audio:
+                self.audio.addItem(audio + " (unavailable — choose another)", audio)
+                index = self.audio.count() - 1
+            self.audio.setCurrentIndex(max(index, 0))
+            self.audio.blockSignals(False)
             if self.backend.currentData() == self._checked_backend:
                 selected = self.screen.currentData()
+                self.screen.blockSignals(True)
                 self._reset_screens()
                 for screen in report.get("screens", []):
                     self.screen.addItem(f"{screen['id']} — {screen['width']} × {screen['height']}", screen['id'])
                 index = self.screen.findData(selected)
+                if index < 0 and selected:
+                    self.screen.addItem(selected + " (unavailable — choose another)", selected)
+                    index = self.screen.count() - 1
                 if index >= 0:
                     self.screen.setCurrentIndex(index)
+                self.screen.blockSignals(False)
         except (ValueError, KeyError, TypeError):
             error = bytes(self.process.readAllStandardError()).decode("utf-8", errors="replace")
             self.report.setPlainText(error or raw or "Diagnostics stopped before returning a report.")

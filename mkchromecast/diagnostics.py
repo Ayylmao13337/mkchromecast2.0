@@ -62,6 +62,12 @@ def collect(backend="auto", display=None):
             ok = False
         checks.append(dict(name="audio-server", ok=ok, detail="Reachable" if ok else
                            "PulseAudio/PipeWire audio server is not reachable from this session"))
+    if shutil.which("pactl"):
+        try:
+            from mkchromecast.pulseaudio import list_sources
+            report["audio_sources"] = list_sources()
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            checks.append(dict(name="audio-sources", ok=False, detail="Cannot list audio sources; check the audio server"))
     if resolved == "wayland":
         report["screen_selection"] = "Portal picker opens when capture starts; not opened by diagnostics"
         checks.append(dict(name="portal-handshake", ok=None,
