@@ -55,3 +55,63 @@ class TrayTests(unittest.TestCase):
             worker._search_cast_()
         self.assertEqual([True], finished)
         self.assertEqual(['fixture'], errors)
+
+    def test_control_panel_screen_settings_reach_session(self):
+        from mkchromecast.systray import menubar
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        panel = window.panel
+        panel.mode.setCurrentIndex(1)
+        panel.backend.setCurrentIndex(1)
+        panel.screen.addItem('Second monitor', '1')
+        panel.screen.setCurrentIndex(1)
+        panel.latency.setChecked(True)
+        from types import SimpleNamespace
+        device = SimpleNamespace(id='receiver-id', name='Living room')
+        with patch.object(window._player, 'prepare') as prepare, patch.object(window._play_thread, 'start'):
+            window._start_device(device)
+        settings = prepare.call_args.args[0]
+        self.assertTrue(settings.screencast)
+        self.assertEqual('cinnamon', settings.capture_backend)
+        self.assertEqual('1', settings.screen)
+        self.assertTrue(settings.low_latency)
+        self.assertEqual('receiver-id', settings.device_id)
+        self.assertFalse(panel.options.isEnabled())
+        window._play_finished()
+        self.assertTrue(panel.options.isEnabled())
+        panel.mode.setCurrentIndex(0)
+        args = panel.apply_args(self.settings.args)
+        self.assertFalse(args.video)
+        self.assertFalse(args.low_latency)
+        self.assertIsNone(args.screen)
+        self.assertEqual('auto', args.capture_backend)
+        self.assertFalse(self.settings.args.screencast)
+
+    def test_diagnostics_updates_screens_without_starting_session(self):
+        import json
+        from mkchromecast.systray import menubar
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        panel = window.panel
+        report = {'scope': 'Local checks only', 'checks': [
+            {'name': 'ffmpeg', 'ok': False, 'detail': 'Install ffmpeg'}],
+            'screens': [{'id': 'DP-0', 'width': 1920, 'height': 1200}]}
+        with patch.object(panel, 'process') as process, patch.object(window._player, 'prepare') as prepare:
+            process.state.return_value = 0
+            panel.diagnose()
+            process.start.assert_called_once()
+            process.readAllStandardOutput.return_value = json.dumps(report).encode()
+            panel._diagnosed()
+            self.assertIn('FAIL', panel.report.toPlainText())
+            self.assertGreaterEqual(panel.screen.findData('DP-0'), 0)
+            prepare.assert_not_called()
+
+    def test_screen_mode_not_offered_on_macos(self):
+        from mkchromecast.systray import menubar
+        self.settings.platform = 'Darwin'
+        window = menubar(self.settings)
+        self.addCleanup(window.tray.hide)
+        self.addCleanup(window.close)
+        self.assertEqual(1, window.panel.mode.count())

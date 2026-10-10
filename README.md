@@ -167,3 +167,10 @@ python test.py --test-connect-to 'Living Room' --test-media-file /path/to/test.m
 
 Historical packaging/DMG scripts and the `nodejs` subtree remain in the repository
 for migration reference. Use the PEP 517 wheel build above for this alpha.
+
+### Desktop control window
+
+Install the optional interface with `python -m pip install '.[tray]'`, then run
+`mkchromecast --tray`. The window provides device selection, start/stop, audio or
+screen sharing, monitor selection, resolution, FPS, low latency and local setup
+checks. See [Desktop controls](docs/GUI.md).
