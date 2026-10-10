@@ -48,6 +48,7 @@ class FlaskServer:
         FlaskServer._producer = None
         FlaskServer._direct_file = None
         FlaskServer._cleanup = None
+        FlaskServer._health_check = None
         FlaskServer._command_factory = None
         FlaskServer._pass_fds = ()
         FlaskServer._app.add_url_rule("/stream", view_func=FlaskServer._stream)
@@ -73,7 +74,7 @@ class FlaskServer:
 
     @staticmethod
     def init_video(chunk_size, media_type, command=None, pass_fds=None,
-                   command_factory=None, direct_file=None, cleanup=None):
+                   command_factory=None, direct_file=None, cleanup=None, health_check=None):
         if command is None and command_factory is None and direct_file is None:
             raise ValueError("init_video needs a command, command_factory or direct_file")
         FlaskServer._init_common(True)
@@ -84,6 +85,7 @@ class FlaskServer:
         FlaskServer._media_type = media_type
         FlaskServer._direct_file = direct_file
         FlaskServer._cleanup = cleanup
+        FlaskServer._health_check = health_check
 
     @staticmethod
     def _index():
@@ -204,6 +206,8 @@ def _serve(flask_init, host, port, connection):
                 if connection.recv() == "stop":
                     break
             server.handle_request()
+            if FlaskServer._health_check:
+                FlaskServer._health_check()
             while not FlaskServer._errors.empty():
                 connection.send(("error", FlaskServer._errors.get_nowait()))
     except (EOFError, BrokenPipeError):

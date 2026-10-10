@@ -24,6 +24,7 @@ class CastSession:
         self.cancel = threading.Event()
         self.state = "idle"
         self.last_error = None
+        self.cleanup_errors = []
         self._closed = False
         self._next_retry = 0
         self._retry_delay = 1
@@ -43,9 +44,16 @@ class CastSession:
             self.settings.capture_device = "Mkchromecast.monitor"
             if capture and self.settings.platform == "Linux" and not self.settings.adevice:
                 from mkchromecast.pulseaudio import AudioSink
-                self.sink = AudioSink().start()
-                self.settings.capture_device = self.sink.monitor
-                print(f"Select {self.sink.name} in your audio mixer to route application audio")
+                source = getattr(self.settings, "audio_source", None)
+                if source:
+                    from mkchromecast.pulseaudio import list_sources
+                    if source not in {item['name'] for item in list_sources()}:
+                        raise ValueError("Selected audio source is no longer available; refresh audio sources")
+                    self.settings.capture_device = source
+                else:
+                    self.sink = AudioSink().start()
+                    self.settings.capture_device = self.sink.monitor
+                    print(f"Select {self.sink.name} in your audio mixer to route application audio")
             if capture and self.settings.platform == "Darwin":
                 from mkchromecast.audio_devices import AudioRouter
                 self.router = AudioRouter()
@@ -102,12 +110,14 @@ class CastSession:
 
     def pause(self):
         self.receiver.pause()
-        if self.pipeline and self.settings.videoarg:
+        if (self.pipeline and self.settings.videoarg
+                and getattr(self.settings, "capture_backend", "auto") != "cinnamon"):
             self.pipeline.pause()
         self.state = "paused"
 
     def resume(self):
-        if self.pipeline and self.settings.videoarg:
+        if (self.pipeline and self.settings.videoarg
+                and getattr(self.settings, "capture_backend", "auto") != "cinnamon"):
             self.pipeline.resume()
         self.receiver.play()
         self.state = "playing"
@@ -127,6 +137,7 @@ class CastSession:
                 except Exception as exc:
                     errors.append(str(exc))
         self.state = "idle"
+        self.cleanup_errors = errors
         if errors:
             self.last_error = "; ".join(errors)
             print("Cleanup warning:", self.last_error)

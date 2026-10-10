@@ -40,6 +40,7 @@ class Search(QObject):
 
 class Player(QObject):
     pcastfinished = pyqtSignal()
+    connection_changed = pyqtSignal(bool)
     pcastready = pyqtSignal(str)
 
     def __init__(self):
@@ -63,8 +64,15 @@ class Player(QObject):
         try:
             self.session.start()
             self.pcastready.emit("_play_cast_ success")
+            connected = True
             while not self.session.cancel.wait(.25):
                 self.session.check()
+                if self.session.settings.receiver == "chromecast":
+                    client = self.session.receiver.cast.socket_client
+                    current = bool(client.is_connected and not client.is_stopped)
+                    if current != connected:
+                        connected = current
+                        self.connection_changed.emit(current)
                 while not self.commands.empty():
                     action, value = self.commands.get_nowait()
                     if action == "volume":
@@ -74,6 +82,8 @@ class Player(QObject):
         finally:
             if self.session:
                 self.session.close()
+                if self.session.cleanup_errors:
+                    self.pcastready.emit("Cleanup warning: " + "; ".join(self.session.cleanup_errors))
             self.pcastfinished.emit()
 
 

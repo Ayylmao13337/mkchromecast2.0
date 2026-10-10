@@ -66,3 +66,23 @@ class SessionTests(unittest.TestCase):
         session.check()
         self.receiver.play_cast.assert_not_called()
         session.close()
+
+    def test_explicit_source_does_not_change_audio_routing(self):
+        conf = settings()
+        conf.audio_source = 'speakers.monitor'
+        with patch('mkchromecast.pulseaudio.list_sources', return_value=[{'name': conf.audio_source}]):
+            session = CastSession(conf).start()
+        self.assertEqual('speakers.monitor', conf.capture_device)
+        self.assertIsNone(session.sink)
+        session.close()
+        self.sink.close.assert_not_called()
+
+    def test_missing_source_fails_without_fallback_or_playback(self):
+        conf = settings()
+        conf.audio_source = 'unplugged'
+        with patch('mkchromecast.pulseaudio.list_sources', return_value=[]):
+            with self.assertRaisesRegex(ValueError, 'no longer available'):
+                CastSession(conf).start()
+        self.start.assert_not_called()
+        self.receiver.play_cast.assert_not_called()
+        self.receiver.close.assert_called_once()
