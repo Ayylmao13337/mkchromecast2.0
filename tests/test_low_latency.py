@@ -58,3 +58,18 @@ class LowLatencyTests(unittest.TestCase):
         self.assertGreaterEqual(len(result['complete_media_fragments_s']), 7)
         h264 = next(s for s in result['streams'] if s['codec_name'] == 'h264')
         self.assertEqual(h264['has_b_frames'], 0)
+
+    def test_short_cinnamon_profile_and_validation(self):
+        with patch('platform.system', return_value='Linux'):
+            args = ['--video', '--screencast', '--capture-backend', 'cinnamon',
+                    '--low-latency', '--cinnamon-fragment-ms', '100', '--stream-metrics']
+            conf = Mkchromecast(_arg_parsing.Parser.parse_args(args))
+            with self.assertRaisesRegex(ValueError, 'requires --low-latency'):
+                Mkchromecast(_arg_parsing.Parser.parse_args([v for v in args if v != '--low-latency']))
+        settings = video._build_video_settings(conf, None)
+        settings.cinnamon_capture = '/private/frames'
+        command = Video(settings).command
+        self.assertIn('fragment-duration=100', command)
+        self.assertIn('max-size-time=100000000', command)
+        self.assertTrue(conf.stream_metrics)
+        self.assertNotIn('leaky=downstream', command[command.index('x264enc'):])

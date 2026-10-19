@@ -83,3 +83,42 @@ Also check five-minute stability, audio sync and stop/reconnect behavior.
 Chromium comparison must use the same receiver/network and comparable video
 resolution. A faster Cast Streaming transport is a separate investigation:
 [Cast Streaming integration assessment](CAST_STREAMING.md).
+
+## Cinnamon: compare 250 ms and 100 ms fragments
+
+For a TV delay of several seconds that barely changes with resolution/FPS, first
+measure output cadence instead of assuming the encoder is too slow. The optional
+`--stream-metrics` prints `STREAM_METRICS` JSON every approximately five seconds
+when data arrives, plus a final summary on stream closure. It observes complete
+MP4 media boxes before HTTP transmission, without opening a second capture or
+receiver connection, and retains only a box header rather than video frames.
+`first_media_box_s` starts when HTTP consumption begins (not at capture startup).
+`max_media_box_gap_s` is the largest observed gap between completed media boxes;
+audio/video boxes may alternate, so this is not a video frame interval. HTTP
+backpressure can also affect these numbers. No output while stalled is itself
+useful; the summary is emitted only when reading resumes or closes.
+
+Compare the same screen, FPS and resolution, stopping one run before the next:
+
+```sh
+mkchromecast --device-id YOUR_DEVICE_ID --video --screencast \
+  --capture-backend cinnamon --resolution 1080p --fps 60 \
+  --low-latency --stream-metrics --cinnamon-fragment-ms 250
+
+mkchromecast --device-id YOUR_DEVICE_ID --video --screencast \
+  --capture-backend cinnamon --resolution 1080p --fps 60 \
+  --low-latency --stream-metrics --cinnamon-fragment-ms 100
+```
+
+The experimental 100 ms profile reduces mux fragment duration, encoded queue
+limits and the keyframe interval (approximately 100 ms, rounded to whole frames).
+It never drops encoded video packets. More frequent keyframes can reduce quality
+at the fixed bitrate. Revert to 250 ms if playback becomes unstable. The default
+profile is unchanged. These flags currently target Cinnamon only.
+
+For end-to-end comparison, display a running stopwatch on the PC and photograph
+both the PC and TV in the same shot. Repeat several times after startup settles.
+Compare the displayed times and note freezes/audio sync. Short media-box gaps
+alone do NOT prove low TV delay. If the TV remains 2–3 seconds behind despite fast
+output, investigate receiver buffering/Cast Streaming rather than claiming an
+encoder tuning success. Cast Streaming is still a separate, unimplemented path.

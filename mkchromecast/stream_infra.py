@@ -41,6 +41,7 @@ class FlaskServer:
             raise RuntimeError("Flask Server can only be initialized once")
         FlaskServer._app = flask.Flask("mkchromecast")
         FlaskServer._video_mode = video_mode
+        FlaskServer._stream_metrics = False
         FlaskServer._slots = threading.BoundedSemaphore(1)
         FlaskServer._active = set()
         FlaskServer._active_lock = threading.Lock()
@@ -74,7 +75,7 @@ class FlaskServer:
 
     @staticmethod
     def init_video(chunk_size, media_type, command=None, pass_fds=None,
-                   command_factory=None, direct_file=None, cleanup=None, health_check=None):
+                   command_factory=None, direct_file=None, cleanup=None, health_check=None, stream_metrics=False):
         if command is None and command_factory is None and direct_file is None:
             raise ValueError("init_video needs a command, command_factory or direct_file")
         FlaskServer._init_common(True)
@@ -86,6 +87,7 @@ class FlaskServer:
         FlaskServer._direct_file = direct_file
         FlaskServer._cleanup = cleanup
         FlaskServer._health_check = health_check
+        FlaskServer._stream_metrics = stream_metrics
 
     @staticmethod
     def _index():
@@ -138,15 +140,22 @@ class FlaskServer:
             FlaskServer._slots.release()
 
         def chunks():
+            from mkchromecast.stream_metrics import StreamMetrics
+            metrics = StreamMetrics() if FlaskServer._stream_metrics else None
             try:
                 while not closed.is_set():
                     data = pipeline.read(FlaskServer._chunk_size)
                     if not data:
                         break
+                    if metrics:
+                        metrics.feed(data)
+                        metrics.report()
                     yield data
             except PipelineError as exc:
                 FlaskServer._errors.put(str(exc))
             finally:
+                if metrics:
+                    metrics.report(final=True)
                 close()
 
         response = flask.Response(chunks(), mimetype=FlaskServer._media_type)

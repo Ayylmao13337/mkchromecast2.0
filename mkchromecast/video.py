@@ -66,6 +66,7 @@ def _build_video_settings(mkcc, wayland_capture):
         wayland_capture=wayland_capture,
         copy_video=getattr(mkcc, "copy_video", False),
         low_latency=getattr(mkcc, "low_latency", False),
+        cinnamon_fragment_ms=getattr(mkcc, "cinnamon_fragment_ms", 250),
     )
 
 
@@ -94,6 +95,7 @@ def _flask_init(mkcc=None):
             stream_infra.FlaskServer.init_video(
                 chunk_size=mkcc.chunk_size, command=command,
                 media_type="video/mp4", cleanup=capture.close, health_check=capture.check,
+                stream_metrics=getattr(mkcc, "stream_metrics", False),
             )
         except BaseException:
             capture.close()

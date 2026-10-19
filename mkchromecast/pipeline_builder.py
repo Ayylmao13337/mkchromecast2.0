@@ -226,6 +226,7 @@ class VideoSettings:
     copy_video: bool = False
     cinnamon_capture: Optional[str] = None
     low_latency: bool = False
+    cinnamon_fragment_ms: int = 250
     x11_capture: Optional[tuple[int, int, int, int]] = None
 
 
@@ -343,11 +344,13 @@ class Video:
         low_latency = self._settings.low_latency
         key_int_max = str(max(1, math.ceil(float(fps) / 2) if low_latency else round(float(fps) * 2)))
         frame_rate = Fraction(fps).limit_denominator(1001)
-        fragment_ms = 250 if low_latency else 1000
+        fragment_ms = self._settings.cinnamon_fragment_ms if low_latency and self._settings.cinnamon_capture else 250 if low_latency else 1000
+        if fragment_ms == 100:
+            key_int_max = str(max(1, math.ceil(float(fps) / 10)))
         # Dropping raw frames is safe; dropping encoded H.264 packets is not.
         raw_queue = (["!", "queue", "max-size-buffers=2", "max-size-bytes=0",
                       "max-size-time=0", "leaky=downstream"] if low_latency else [])
-        encoded_queue = (["max-size-time=250000000", "max-size-buffers=0",
+        encoded_queue = ([f"max-size-time={fragment_ms * 1000000}", "max-size-buffers=0",
                           "max-size-bytes=0"] if low_latency else [])
 
         # Chromecast needs H.264 High profile, 4:2:0 (yuv420p / I420), at a

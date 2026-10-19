@@ -602,3 +602,8 @@ Parser.add_argument("--receiver", choices=["chromecast", "sonos"], default="chro
 Parser.add_argument("--discovery-timeout", type=float, default=10.0)
 Parser.add_argument("--startup-timeout", type=float, default=330.0,
                     help="Startup deadline including any desktop portal prompt")
+
+Parser.add_argument("--cinnamon-fragment-ms", type=int, choices=(100, 250), default=250,
+                    help="Experimental Cinnamon low-latency fragment duration (default: 250 ms).")
+Parser.add_argument("--stream-metrics", action="store_true",
+                    help="Print passive Cinnamon MP4 output cadence measurements; not TV latency.")

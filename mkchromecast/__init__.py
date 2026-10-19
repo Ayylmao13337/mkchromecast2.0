@@ -103,6 +103,8 @@ class Mkchromecast:
         self.screencast: bool = args.screencast
         self.capture_backend = args.capture_backend
         self.low_latency = args.low_latency
+        self.cinnamon_fragment_ms = args.cinnamon_fragment_ms
+        self.stream_metrics = args.stream_metrics
         self.screen = args.screen
         self.display: Optional[str] = args.display
         self.vcodec: str = args.vcodec
@@ -284,6 +286,11 @@ class Mkchromecast:
                 self._fatal_error("--low-latency requires --video --screencast")
             if self.vcodec not in {"libx264", "h264_nvenc"}:
                 self._fatal_error("--low-latency supports libx264 or h264_nvenc only")
+        if self.cinnamon_fragment_ms != 250 or self.stream_metrics:
+            if not self.screencast or self.capture_backend != "cinnamon":
+                self._fatal_error("Cinnamon fragment tuning and stream metrics require --video --screencast --capture-backend cinnamon")
+            if self.cinnamon_fragment_ms != 250 and not self.low_latency:
+                self._fatal_error("--cinnamon-fragment-ms 100 requires --low-latency")
         if self.capture_backend == "cinnamon":
             if not self.screencast:
                 self._fatal_error("--capture-backend cinnamon requires --video --screencast")
