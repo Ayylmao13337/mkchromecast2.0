@@ -118,7 +118,14 @@ class Config:
             raise ValueError("Configuration bitrate/sample rate is out of range")
         if self.colors not in {"black", "blue", "white"}:
             raise ValueError("Configuration icon color must be black, blue or white")
-        # Force ConfigParser's boolean validation, too.
+        # Older releases wrote the labels displayed in the preferences UI.
+        # Normalize only these known aliases; keep rejecting unknown values.
+        # Read-only loads change memory only, and writable contexts persist
+        # canonical booleans through the existing atomic save path.
+        for key in (NOTIFICATIONS, SEARCH_AT_LAUNCH):
+            value = self._config.get(SETTINGS, key).strip().lower()
+            if value in {"enabled", "disabled"}:
+                self._config.set(SETTINGS, key, str(value == "enabled"))
         _ = self.notifications, self.search_at_launch
         if self.backend == "node" and self.codec != "mp3":
             raise ValueError("The node backend only supports mp3")

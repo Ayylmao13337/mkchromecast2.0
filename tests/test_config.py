@@ -73,3 +73,35 @@ class ConfigTests(unittest.TestCase):
         conf.write_defaults()
         conf.load_and_validate()
         self.assertEqual(192, conf.bitrate)
+
+    def test_legacy_boolean_labels_load_without_modifying_files(self):
+        self.path.parent.mkdir()
+        for filename in ('mkchromecast.cfg', 'mkchromecast_beta.cfg'):
+            for label, expected in (('disabled', False), ('enabled', True),
+                                    (' DISABLED ', False), (' Enabled ', True)):
+                with self.subTest(filename=filename, label=label):
+                    source = self.path.with_name(filename)
+                    original = f'[settings]\nnotifications = {label}\nsearch_at_launch = {label}\nbitrate = 256\n'
+                    source.write_text(original)
+                    with Config('Linux', self.path, read_only=True) as conf:
+                        self.assertIs(conf.notifications, expected)
+                        self.assertIs(conf.search_at_launch, expected)
+                        self.assertEqual(256, conf.bitrate)
+                    self.assertEqual(original, source.read_text())
+                    source.unlink()
+
+    def test_writable_legacy_booleans_are_saved_canonically(self):
+        self.path.parent.mkdir()
+        legacy = self.path.with_name('mkchromecast_beta.cfg')
+        original = '[settings]\nnotifications = disabled\nsearch_at_launch = enabled\nbitrate = 256\n'
+        legacy.write_text(original)
+        with Config('Linux', self.path):
+            pass
+        saved = self.path.read_text()
+        self.assertIn('notifications = False', saved)
+        self.assertIn('search_at_launch = True', saved)
+        self.assertEqual(original, legacy.read_text())
+        with Config('Linux', self.path, read_only=True) as conf:
+            self.assertFalse(conf.notifications)
+            self.assertTrue(conf.search_at_launch)
+            self.assertEqual(256, conf.bitrate)
