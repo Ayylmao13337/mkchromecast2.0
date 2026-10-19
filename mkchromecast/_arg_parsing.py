@@ -607,3 +607,6 @@ Parser.add_argument("--cinnamon-fragment-ms", type=int, choices=(100, 250), defa
                     help="Experimental Cinnamon low-latency fragment duration (default: 250 ms).")
 Parser.add_argument("--stream-metrics", action="store_true",
                     help="Print passive Cinnamon MP4 output cadence measurements; not TV latency.")
+
+Parser.add_argument("--local-preview", action="store_true",
+                    help="Preview Cinnamon screencast locally with ffplay, without connecting to a receiver.")

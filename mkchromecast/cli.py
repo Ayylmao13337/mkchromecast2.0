@@ -52,6 +52,15 @@ def main(argv=None):
         from mkchromecast.session import CastSession, receiver_for
         for number in (signal.SIGINT, signal.SIGTERM):
             previous[number] = signal.signal(number, stop_signal)
+        if settings.local_preview:
+            from mkchromecast.local_preview import LocalPreviewSession
+            session = LocalPreviewSession(settings)
+            session.start()
+            while not stopped.wait(.25):
+                session.check()
+                if session.finished:
+                    break
+            return 0
         if settings.operation == OpMode.DISCOVER:
             receiver = receiver_for(settings)
             try:

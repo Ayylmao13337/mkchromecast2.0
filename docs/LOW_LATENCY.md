@@ -122,3 +122,41 @@ Compare the displayed times and note freezes/audio sync. Short media-box gaps
 alone do NOT prove low TV delay. If the TV remains 2–3 seconds behind despite fast
 output, investigate receiver buffering/Cast Streaming rather than claiming an
 encoder tuning success. Cast Streaming is still a separate, unimplemented path.
+
+## Compare local playback with the TV
+
+`--local-preview` uses the production Cinnamon capture, H.264/AAC encoding and
+HTTP pipeline, but binds only to `127.0.0.1` on an automatically allocated port.
+It does not discover or connect to a Chromecast. It opens ffplay with reduced
+buffering flags and muted audio. Close the player or press Ctrl-C to release the
+capture, HTTP server, player and private audio sink. Install Mint's `ffmpeg`
+package if ffplay is missing. Do not run local preview and casting together:
+Cinnamon capture supports one owned recorder at a time.
+
+1. In a terminal with the virtual environment active, start the source clock:
+   `python -m mkchromecast.latency_clock` (requires the tray/Qt extra).
+2. Put that clock on the primary/captured monitor.
+3. In another activated terminal, start:
+
+```sh
+mkchromecast --local-preview --video --screencast \
+  --capture-backend cinnamon --screen primary --resolution 1080p --fps 60 \
+  --low-latency --cinnamon-fragment-ms 250 --stream-metrics
+```
+
+4. Move the preview onto the other monitor. Do not capture its own window.
+   Let it settle for at least ten seconds. Photograph both clocks in the same
+   shot and subtract the delayed time from the source time. Take several samples.
+   Screen refresh and camera exposure limit accuracy; the millisecond digits
+   are for readability, not a promise of millisecond accuracy.
+5. Stop local preview, keep the clock running and cast with the same settings
+   (remove `--local-preview`, add your `--device-id`). Photograph the PC clock
+   and TV copy together. Compare with the local measurements.
+
+The local delay includes capture, encoding/muxing, loopback HTTP, ffplay decoding,
+its buffering and local display latency. It is not a pure encoder measurement.
+A fast local preview plus a slow TV strengthens the case for investigating the
+network/receiver path. A slow local preview alone does not prove slow capture:
+ffplay may buffer too. Muted playback still processes audio, but this comparison
+is visual only and cannot establish audio sync. No automated TV latency estimate
+or Cast Streaming implementation is included.
