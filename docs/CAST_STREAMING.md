@@ -1,6 +1,8 @@
 # Cast Streaming integration assessment
 
-Status: source investigation and proposed module boundary, **not implemented**.
+Status: isolated native-build and file-session prototype in
+`experimental/cast_streaming/`; **live Cast Streaming is not implemented**.
+See that directory for validation gates and current limitations.
 The implemented `--low-latency` option still sends fragmented MP4 over HTTP.
 It must not be described as Chromium-style mirroring or guaranteed to match
 Chromium latency.
