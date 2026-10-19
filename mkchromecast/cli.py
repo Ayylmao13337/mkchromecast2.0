@@ -2,6 +2,7 @@
 import signal
 import sys
 import threading
+import json
 
 from mkchromecast import Mkchromecast, _arg_parsing
 from mkchromecast.constants import OpMode
@@ -12,6 +13,7 @@ def main(argv=None):
     session = None
     stopped = threading.Event()
     previous = {}
+    args = None
 
     def stop_signal(_number, _frame):
         stopped.set()
@@ -20,6 +22,19 @@ def main(argv=None):
 
     try:
         args = _arg_parsing.Parser.parse_args(argv)
+        if args.diagnose:
+            from mkchromecast.diagnostics import collect
+            report = collect(args.capture_backend, args.display)
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            return 1 if any(check["ok"] is False for check in report["checks"]) else 0
+        if args.list_screens:
+            from mkchromecast.screens import list_screens
+            available = list_screens(args.capture_backend, args.display)
+            print("ID\tNAME\tSIZE\tPOSITION\tPRIMARY")
+            for screen in available:
+                print(f"{screen['id']}\t{screen.get('name', screen['id'])}\t{screen['width']}x{screen['height']}\t"
+                      f"{screen['x']},{screen['y']}\t{'yes' if screen['primary'] else 'no'}")
+            return 0
         settings = Mkchromecast(args)
         if settings.operation == OpMode.VERSION:
             print("mkchromecast " + __version__)
@@ -85,6 +100,9 @@ def main(argv=None):
         return 130
     except (Exception,) as exc:
         print(f"mkchromecast: {exc}", file=sys.stderr)
+        if getattr(args, "screencast", False):
+            print("Local checks: mkchromecast --diagnose --capture-backend " + args.capture_backend,
+                  file=sys.stderr)
         return 1
     finally:
         if session is not None:

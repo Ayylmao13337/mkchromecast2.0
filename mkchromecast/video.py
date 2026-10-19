@@ -5,6 +5,7 @@ Google Cast device has to point out to http://ip:5000/stream
 """
 
 from functools import partial
+from dataclasses import replace
 import os
 
 import mkchromecast
@@ -64,6 +65,7 @@ def _build_video_settings(mkcc, wayland_capture):
         youtube_url=mkcc.youtube_url,
         wayland_capture=wayland_capture,
         copy_video=getattr(mkcc, "copy_video", False),
+        low_latency=getattr(mkcc, "low_latency", False),
     )
 
 
@@ -74,6 +76,28 @@ def _flask_init(mkcc=None):
     if getattr(mkcc, "direct_file", None):
         stream_infra.FlaskServer.init_video(
             chunk_size=65536, direct_file=mkcc.direct_file, media_type="video/mp4")
+        return
+
+    if (mkcc.operation == OpMode.SCREENCAST
+            and getattr(mkcc, "capture_backend", "auto") == "cinnamon"):
+        from mkchromecast.screencast_cinnamon import CinnamonCaptureSession
+        capture = CinnamonCaptureSession(mkcc.fps, mkcc.resolution,
+                                         screen=getattr(mkcc, "screen", None))
+        try:
+            socket_path = capture.open()
+            settings = replace(_build_video_settings(mkcc, None), cinnamon_capture=socket_path)
+            command = pipeline_builder.Video(settings).command
+            command = ["device=" + getattr(mkcc, "capture_device", "Mkchromecast.monitor")
+                       if value == "device=Mkchromecast.monitor" else value for value in command]
+            if mkcc.debug:
+                print(f":::cinnamon::: pipeline_builder command: {command}")
+            stream_infra.FlaskServer.init_video(
+                chunk_size=mkcc.chunk_size, command=command,
+                media_type="video/mp4", cleanup=capture.close, health_check=capture.check,
+            )
+        except BaseException:
+            capture.close()
+            raise
         return
 
     if (mkcc.operation == OpMode.SCREENCAST
@@ -120,7 +144,13 @@ def _flask_init(mkcc=None):
         )
         return
 
-    builder = pipeline_builder.Video(_build_video_settings(mkcc, None))
+    settings = _build_video_settings(mkcc, None)
+    selection = None
+    if mkcc.operation == OpMode.SCREENCAST and getattr(mkcc, "screen", None) is not None:
+        from mkchromecast.screens import X11ScreenSelection
+        selection = X11ScreenSelection(mkcc.screen, mkcc.display)
+        settings = replace(settings, x11_capture=selection.geometry)
+    builder = pipeline_builder.Video(settings)
     if mkcc.debug is True:
         print(f":::ffmpeg::: pipeline_builder command: {builder.command}")
 
@@ -129,11 +159,17 @@ def _flask_init(mkcc=None):
         command=[getattr(mkcc, "capture_device", "Mkchromecast.monitor")
                  if v == "Mkchromecast.monitor" else v for v in builder.command],
         media_type=(mkcc.mtype or "video/mp4"),
+        health_check=selection.check if selection else None,
     )
 
 
 def main(mkcc=None, cancel=None):
     mkcc = mkcc or mkchromecast.Mkchromecast()
+    if getattr(mkcc, "screen", None) is not None and screencast_wayland.is_wayland_session():
+        raise ValueError("Wayland uses the portal screen picker; omit --screen")
+    if getattr(mkcc, "capture_backend", "auto") == "cinnamon":
+        from mkchromecast.screencast_cinnamon import preflight
+        preflight()
     wayland_screencast_preflight(mkcc)
     if (mkcc.operation == OpMode.SCREENCAST
             and screencast_wayland.is_wayland_session() and mkcc.vcodec != "libx264"):

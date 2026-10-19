@@ -2,8 +2,7 @@
 import os
 from typing import Any, Optional
 import webbrowser
-from PyQt5.QtWidgets import QWidget, QLabel, QComboBox, QPushButton, QLineEdit
-from PyQt5 import QtCore
+from PyQt5.QtWidgets import QWidget, QLabel, QComboBox, QPushButton, QLineEdit, QVBoxLayout, QFormLayout, QHBoxLayout
 from mkchromecast import constants, config
 from mkchromecast.utils import is_installed
 
@@ -50,9 +49,7 @@ class preferences(QWidget):
                 backends.append(option)
 
         self.backend = QLabel("Select Backend", self)
-        self.backend.move(20 * self.scale_factor, 24 * self.scale_factor)
         self.qcbackend = QComboBox(self)
-        self.qcbackend.move(180 * self.scale_factor, 20 * self.scale_factor)
         self.qcbackend.setMinimumContentsLength(7)
         for backend in backends:
             self.qcbackend.addItem(backend)
@@ -63,9 +60,7 @@ class preferences(QWidget):
 
     def init_codec(self):
         self.codec = QLabel("Audio Coding Format", self)
-        self.codec.move(20 * self.scale_factor, 56 * self.scale_factor)
         self.qccodec = QComboBox(self)
-        self.qccodec.move(180 * self.scale_factor, 54 * self.scale_factor)
         self.qccodec.setMinimumContentsLength(7)
 
         self.update_available_codecs()
@@ -78,9 +73,7 @@ class preferences(QWidget):
         Bitrate
         """
         self.bitrate = QLabel("Select Bitrate (kbit/s)", self)
-        self.bitrate.move(20 * self.scale_factor, 88 * self.scale_factor)
         self.qcbitrate = QComboBox(self)
-        self.qcbitrate.move(180 * self.scale_factor, 88 * self.scale_factor)
         self.qcbitrate.setMinimumContentsLength(7)
 
         self.update_available_bitrates()
@@ -93,9 +86,7 @@ class preferences(QWidget):
         Sample rate
         """
         self.samplerate = QLabel("Sample Rate (Hz)", self)
-        self.samplerate.move(20 * self.scale_factor, 120 * self.scale_factor)
         self.qcsamplerate = QComboBox(self)
-        self.qcsamplerate.move(180 * self.scale_factor, 120 * self.scale_factor)
         self.qcsamplerate.setMinimumContentsLength(7)
 
         for samplerate in constants.ALL_SAMPLE_RATES:
@@ -110,9 +101,7 @@ class preferences(QWidget):
         Icon colors
         """
         self.colors = QLabel("Icon Colors", self)
-        self.colors.move(20 * self.scale_factor, 152 * self.scale_factor)
         self.qccolors = QComboBox(self)
-        self.qccolors.move(180 * self.scale_factor, 152 * self.scale_factor)
         self.qccolors.setMinimumContentsLength(7)
 
         colors_list = ["black", "blue", "white"]
@@ -127,9 +116,7 @@ class preferences(QWidget):
         Notifications
         """
         self.notifications = QLabel("Notifications", self)
-        self.notifications.move(20 * self.scale_factor, 184 * self.scale_factor)
         self.qcnotifications = QComboBox(self)
-        self.qcnotifications.move(180 * self.scale_factor, 184 * self.scale_factor)
         self.qcnotifications.setMinimumContentsLength(7)
 
         for item in VISUAL_BOOL.values():
@@ -144,9 +131,7 @@ class preferences(QWidget):
         Search at launch
         """
         self.atlaunch = QLabel("Search At Launch", self)
-        self.atlaunch.move(20 * self.scale_factor, 214 * self.scale_factor)
         self.qcatlaunch = QComboBox(self)
-        self.qcatlaunch.move(180 * self.scale_factor, 214 * self.scale_factor)
         self.qcatlaunch.setMinimumContentsLength(7)
 
         for item in VISUAL_BOOL.values():
@@ -161,9 +146,7 @@ class preferences(QWidget):
         Set the ALSA Device
         """
         self.alsadevice = QLabel("ALSA Device", self)
-        self.alsadevice.move(20 * self.scale_factor, 244 * self.scale_factor)
         self.qle_alsadevice = QLineEdit(self)
-        self.qle_alsadevice.move(179 * self.scale_factor, 244 * self.scale_factor)
         self.qle_alsadevice.setFixedWidth(84 * self.scale_factor)
 
         if self.config.alsa_device:
@@ -176,11 +159,9 @@ class preferences(QWidget):
         Buttons
         """
         resetbtn = QPushButton("Reset Settings", self)
-        resetbtn.move(10 * self.scale_factor, 274 * self.scale_factor)
         resetbtn.clicked.connect(self.reset_configuration)
 
         faqbtn = QPushButton("FAQ", self)
-        faqbtn.move(138 * self.scale_factor, 274 * self.scale_factor)
         faqbtn.clicked.connect(
             lambda: webbrowser.open(
                 "https://github.com/muammar/mkchromecast/wiki/FAQ"
@@ -191,24 +172,32 @@ class preferences(QWidget):
         """
         Geometry and window's title
         """
-        self.setGeometry(
-            300 * self.scale_factor,
-            300 * self.scale_factor,
-            300 * self.scale_factor,
-            200 * self.scale_factor,
-        )
-        if self.settings.platform == "Darwin":
-            # This is to fix the size of the window
-            self.setFixedSize(310 * self.scale_factor, 320 * self.scale_factor)
-        else:
-            # This is to fix the size of the window
-            self.setFixedSize(282 * self.scale_factor, 320 * self.scale_factor)
-        self.setWindowFlags(
-            QtCore.Qt.WindowCloseButtonHint
-            | QtCore.Qt.WindowMinimizeButtonHint
-            | QtCore.Qt.WindowStaysOnTopHint
-        )
-        self.setWindowTitle("Mkchromecast Preferences")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+        form = QFormLayout()
+        form.setSpacing(12)
+        for label, widget in (
+            (self.backend, self.qcbackend), (self.codec, self.qccodec),
+            (self.bitrate, self.qcbitrate), (self.samplerate, self.qcsamplerate),
+            (self.colors, self.qccolors), (self.notifications, self.qcnotifications),
+            (self.atlaunch, self.qcatlaunch),
+        ):
+            form.addRow(label, widget)
+        if self.qle_alsadevice is not None:
+            self.qle_alsadevice.setMinimumWidth(180)
+            self.qle_alsadevice.setMaximumWidth(16777215)
+            form.addRow(self.alsadevice, self.qle_alsadevice)
+        layout.addLayout(form)
+        note = QLabel("Audio settings are saved automatically and apply to the next audio stream.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QHBoxLayout()
+        for button in self.findChildren(QPushButton):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.resize(460, 440)
+        self.setWindowTitle("MKChromecast — Audio preferences")
 
     def reset_configuration(self):
         self.config.write_defaults()
@@ -253,7 +242,6 @@ class preferences(QWidget):
             print("Codecs: %s." % codecs)
 
         self.qccodec.clear()
-        self.qccodec.move(180 * self.scale_factor, 54 * self.scale_factor)
         self.qccodec.setMinimumContentsLength(7)
         for codec in codecs:
             self.qccodec.addItem(codec)
@@ -269,7 +257,6 @@ class preferences(QWidget):
             bitrates = [None]
 
         self.qcbitrate.clear()
-        self.qcbitrate.move(180 * self.scale_factor, 88 * self.scale_factor)
         for bitrate in bitrates:
             self.qcbitrate.addItem(str(bitrate))
         self.qcbitrate.setCurrentIndex(bitrate_idx)

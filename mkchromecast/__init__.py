@@ -101,6 +101,9 @@ class Mkchromecast:
         self.version: bool = args.version
 
         self.screencast: bool = args.screencast
+        self.capture_backend = args.capture_backend
+        self.low_latency = args.low_latency
+        self.screen = args.screen
         self.display: Optional[str] = args.display
         self.vcodec: str = args.vcodec
         self.loop: bool = args.loop
@@ -274,6 +277,22 @@ class Mkchromecast:
             self._fatal_error("Screen capture currently supports Linux only")
         if self.screencast and not self.videoarg:
             self._fatal_error("--screencast requires --video")
+        if self.screen is not None and not self.screencast:
+            self._fatal_error("--screen requires --video --screencast; use --list-screens to find IDs")
+        if self.low_latency:
+            if not self.screencast:
+                self._fatal_error("--low-latency requires --video --screencast")
+            if self.vcodec not in {"libx264", "h264_nvenc"}:
+                self._fatal_error("--low-latency supports libx264 or h264_nvenc only")
+        if self.capture_backend == "cinnamon":
+            if not self.screencast:
+                self._fatal_error("--capture-backend cinnamon requires --video --screencast")
+            if not fps.is_integer() or fps > 60:
+                self._fatal_error("Cinnamon capture requires integer --fps between 1 and 60")
+            if self.vcodec != "libx264":
+                self._fatal_error("Cinnamon capture currently supports --vcodec libx264 only")
+            if self.adevice:
+                self._fatal_error("Cinnamon capture uses PulseAudio/PipeWire audio, not --alsa-device")
         if args.segment_time is not None:
             self._fatal_error("--segment-time is not supported by the live HTTP pipeline")
         if self.adevice and self.backend != "ffmpeg":

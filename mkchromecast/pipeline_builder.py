@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 from typing import Optional, Union
 from fractions import Fraction
+import math
 
 import mkchromecast
 from mkchromecast import colors
@@ -223,6 +224,9 @@ class VideoSettings:
     youtube_url: Optional[str]
     wayland_capture: Optional[tuple[int, int]] = None
     copy_video: bool = False
+    cinnamon_capture: Optional[str] = None
+    low_latency: bool = False
+    x11_capture: Optional[tuple[int, int, int, int]] = None
 
 
 class Video:
@@ -254,6 +258,15 @@ class Video:
                         f"{self._settings.operation}")
 
     def _screencast_command(self) -> list[str]:
+        if self._settings.cinnamon_capture is not None:
+            size = resolution.resolution(self._settings.resolution or "1080p", True)
+            width, height = size.split("x")
+            return self._gst_screencast_command([
+                "shmsrc", "socket-path=" + self._settings.cinnamon_capture,
+                "is-live=true", "do-timestamp=true", "!",
+                (f"video/x-raw,format=I420,width={width},height={height},"
+                 f"framerate={int(float(self._settings.fps))}/1,pixel-aspect-ratio=1/1"),
+            ])
         # Wayland can't be grabbed with x11grab; capture via the portal +
         # PipeWire using a GStreamer pipeline instead. The X11 path is unchanged.
         if self._settings.wayland_capture is not None:
@@ -272,6 +285,17 @@ class Video:
         else:
             maybe_veryfast_cmd = []
 
+        keyframes = str(max(1, math.ceil(float(self._settings.fps) / 2))) if self._settings.low_latency else "60"
+        source_size = screen_size
+        x, y = 0, 0
+        filters = []
+        if self._settings.x11_capture is not None:
+            x, y, width, height = self._settings.x11_capture
+            source_size = f"{width}x{height}"
+            target_width, target_height = screen_size.split("x")
+            filters = ["-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                       f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,setsar=1"]
+
         return ["ffmpeg",
                 "-ac", "2",
                 "-ar", "44100",
@@ -281,18 +305,21 @@ class Video:
                 "-i", "Mkchromecast.monitor",
                 "-f", "x11grab",
                 "-r", self._settings.fps,
-                "-s", screen_size,
-                "-i", "{}+0,0".format(self._settings.display),
+                "-s", source_size,
+                "-i", f"{self._settings.display}+{x},{y}",
+                *filters,
                 "-vcodec", self._settings.vcodec,
                 *maybe_veryfast_cmd,
                 "-tune", "ll" if self._settings.vcodec == "h264_nvenc" else "zerolatency",
                 "-maxrate", "10000k",
                 "-bufsize", "20000k",
                 "-pix_fmt", "yuv420p",
-                "-g", "60",  # '-c:a', 'copy', '-ac', '2',
-                # '-b', '900k',
+                "-g", keyframes,
+                *(["-bf", "0"] if self._settings.low_latency else []),
                 "-f", "mp4",
                 "-movflags", "frag_keyframe+empty_moov",
+                *(["-frag_duration", "250000", "-flush_packets", "1"]
+                  if self._settings.low_latency else []),
                 "-ar", "44100",
                 "-acodec", "aac",
                 "pipe:1",
@@ -306,9 +333,22 @@ class Video:
         and muxes a fragmented MP4 to stdout (fd 1) for the Flask server to relay.
         """
         fd, node = self._settings.wayland_capture
+        return self._gst_screencast_command([
+            "pipewiresrc", f"fd={fd}", f"path={node}", "do-timestamp=true",
+        ])
+
+    def _gst_screencast_command(self, source) -> list[str]:
+        """Shared H.264/AAC encoding for compositor-provided video frames."""
         fps = str(self._settings.fps)
-        key_int_max = str(max(1, round(float(fps) * 2)))
+        low_latency = self._settings.low_latency
+        key_int_max = str(max(1, math.ceil(float(fps) / 2) if low_latency else round(float(fps) * 2)))
         frame_rate = Fraction(fps).limit_denominator(1001)
+        fragment_ms = 250 if low_latency else 1000
+        # Dropping raw frames is safe; dropping encoded H.264 packets is not.
+        raw_queue = (["!", "queue", "max-size-buffers=2", "max-size-bytes=0",
+                      "max-size-time=0", "leaky=downstream"] if low_latency else [])
+        encoded_queue = (["max-size-time=250000000", "max-size-buffers=0",
+                          "max-size-bytes=0"] if low_latency else [])
 
         # Chromecast needs H.264 High profile, 4:2:0 (yuv420p / I420), at a
         # supported resolution. videoconvert otherwise negotiates 4:4:4 (which
@@ -323,18 +363,19 @@ class Video:
 
         return [
             "gst-launch-1.0", "-q",
-            "pipewiresrc", f"fd={fd}", f"path={node}", "do-timestamp=true",
+            *source,
             "!", "videoconvert",
             "!", "videoscale",
             "!", "videorate",
             "!", (f"video/x-raw,format=I420,width={width},height={height},"
                   f"framerate={frame_rate.numerator}/{frame_rate.denominator}"),
+            *raw_queue,
             "!", "x264enc", "tune=zerolatency", "speed-preset=veryfast",
             "bitrate=8000", f"key-int-max={key_int_max}",
             "!", "video/x-h264,profile=high",
             "!", "h264parse",
-            "!", "queue",
-            "!", "mp4mux", "name=mux", "fragment-duration=1000",
+            "!", "queue", *encoded_queue,
+            "!", "mp4mux", "name=mux", f"fragment-duration={fragment_ms}",
             "streamable=true",
             "!", "fdsink", "fd=1",
             "pulsesrc", "device=Mkchromecast.monitor",
@@ -342,7 +383,7 @@ class Video:
             "!", "audioresample",
             "!", "avenc_aac",
             "!", "aacparse",
-            "!", "queue",
+            "!", "queue", *encoded_queue,
             "!", "mux.",
         ]
 

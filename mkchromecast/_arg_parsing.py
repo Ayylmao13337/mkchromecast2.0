@@ -65,6 +65,12 @@ _ActionGroupContainer = Parser.add_argument_group(
                  'mutually-exclusive.'),
 )
 _ActionGroup = _ActionGroupContainer.add_mutually_exclusive_group()
+_ActionGroup.add_argument("--diagnose", action="store_true",
+                         help="Print local screencast diagnostics as JSON; do not cast or record.")
+_ActionGroup.add_argument("--list-screens", action="store_true",
+                         help="List screens for the selected capture backend; do not record.")
+Parser.add_argument("--screen", default=None,
+                    help="Screen ID from --list-screens, or primary; requires --video --screencast.")
 
 Parser.add_argument(
     "--alsa-device",
@@ -412,6 +418,17 @@ _ActionGroup.add_argument(
 
         mkchromecast --video --screencast
     """,
+)
+
+Parser.add_argument(
+    "--capture-backend", choices=("auto", "cinnamon"), default="auto",
+    help="Screen capture: auto (X11/Wayland) or experimental Cinnamon compositor capture.",
+)
+
+Parser.add_argument(
+    "--low-latency", action="store_true",
+    help="Experimental screencast profile: shorter video fragments and keyframe intervals. "
+         "May increase bandwidth and sensitivity to network jitter.",
 )
 
 Parser.add_argument(

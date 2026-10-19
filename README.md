@@ -8,6 +8,20 @@ It is not yet a hardware-certified stable 2.0 release.
 [Implementation status and release gates](docs/MODERNIZATION.md) ·
 [Prioritized tasks](docs/ROADMAP.md) · [License](LICENSE)
 
+For NVIDIA/Cinnamon X11 screen-capture flicker with Allow Flipping enabled,
+an opt-in [experimental Cinnamon capture backend](docs/CINNAMON_CAPTURE.md)
+is available via `--video --screencast --capture-backend cinnamon`.
+It still needs validation on the target desktop and Chromecast.
+
+For screen-sharing delay, try the optional [low-latency profile](docs/LOW_LATENCY.md)
+with `--video --screencast --low-latency`. A separate
+[Cast Streaming assessment](docs/CAST_STREAMING.md) covers the path toward
+Chromium-style mirroring; that transport is not implemented yet.
+
+Use `--list-screens` and `--screen` to choose a monitor, or `--diagnose` for
+read-only local checks. For Cinnamon, add `--capture-backend cinnamon` to the
+listing/diagnostic command. See [screen selection and diagnostics](docs/DIAGNOSTICS.md).
+
 ## Install from this checkout
 
 Requires Python 3.11 or newer on Linux or macOS. Windows is not supported.
@@ -153,3 +167,10 @@ python test.py --test-connect-to 'Living Room' --test-media-file /path/to/test.m
 
 Historical packaging/DMG scripts and the `nodejs` subtree remain in the repository
 for migration reference. Use the PEP 517 wheel build above for this alpha.
+
+### Desktop control window
+
+Install the optional interface with `python -m pip install '.[tray]'`, then run
+`mkchromecast --tray`. The window provides device selection, start/stop, audio or
+screen sharing, monitor selection, resolution, FPS, low latency and local setup
+checks. See [Desktop controls](docs/GUI.md).

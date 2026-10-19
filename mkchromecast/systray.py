@@ -47,6 +47,7 @@ class menubar(QtWidgets.QMainWindow):
         self.pcastfailed = False
         self.available_devices = []
         self._pending_device = None
+        self._last_device = None
         self._exiting = False
         self.scale_factor = 1
         self.config = config.Config(platform=settings.platform, read_only=True, debug=settings.debug)
@@ -65,6 +66,7 @@ class menubar(QtWidgets.QMainWindow):
         self._play_thread = QThread(self)
         self._player.moveToThread(self._play_thread)
         self._player.pcastready.connect(self.pcastready)
+        self._player.connection_changed.connect(self.connection_changed)
         self._player.pcastfinished.connect(self._play_thread.quit, Qt.DirectConnection)
         self._play_thread.started.connect(self._player._play_cast_)
         self._play_thread.finished.connect(self._play_finished)
@@ -75,6 +77,11 @@ class menubar(QtWidgets.QMainWindow):
         self._updater.upcastfinished.connect(self._updater_thread.quit, Qt.DirectConnection)
         self._updater_thread.started.connect(self._updater._updater_)
         self.icon = QtGui.QIcon(self._icon_path(self.google[self.config.colors]))
+        from mkchromecast.control_window import ControlPanel
+        self.panel = ControlPanel(self)
+        self.setCentralWidget(self.panel)
+        self.setWindowTitle("MKChromecast 2.0")
+        self.resize(600, 720)
         self.createUI()
 
     def _icon_path(self, name):
@@ -82,7 +89,23 @@ class menubar(QtWidgets.QMainWindow):
         extension = ".icns" if self.settings.platform == "Darwin" else ".png"
         return str(Path(__file__).parent / "resources" / (name + extension))
 
+    def show_controls(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            self.hide()
+            event.ignore()
+        else:
+            self.exit_all()
+            event.ignore()
+
     def show_error(self, message):
+        from mkchromecast.gui_settings import error_help
+        self.panel.status.setText(error_help(message))
+        self.panel.report.setPlainText(message)
         if not self._exiting:
             self.tray.showMessage("Mkchromecast", message, QtWidgets.QSystemTrayIcon.Warning)
 
@@ -112,6 +135,7 @@ class menubar(QtWidgets.QMainWindow):
 
 
     def search_menu(self):
+        self.menu.addAction("Open MKChromecast", self.show_controls)
         self.SearchAction = self.menu.addAction("Search For Media " "Streaming Devices")
         self.SearchAction.triggered.connect(self.search_cast)
 
@@ -157,6 +181,7 @@ class menubar(QtWidgets.QMainWindow):
     def onIntReady(self, available_devices: list):
         print("available_devices received")
         self.available_devices = available_devices
+        self.panel.set_devices(available_devices)
         self.cast_list()
 
     def _set_generic_icon(self, icon_set):
@@ -164,9 +189,6 @@ class menubar(QtWidgets.QMainWindow):
 
     def set_icon_working(self):
         """docstring for fnamicon_working"""
-        if self.config.notifications:
-            self.search_notification()
-
         self._set_generic_icon(self.google_working)
 
     def set_icon_idle(self):
@@ -181,6 +203,8 @@ class menubar(QtWidgets.QMainWindow):
         if self._search_thread.isRunning() or self._exiting:
             return
         self.set_icon_working()
+        self.panel.search.setEnabled(False)
+        self.panel.status.setText("Searching for devices…")
         self._search.cancel.clear()
         self._search_thread.start()
 
@@ -255,37 +279,59 @@ class menubar(QtWidgets.QMainWindow):
             return
         self._start_device(clicked_item)
 
+    def retry_connection(self):
+        if self._last_device is not None and not self._exiting:
+            self.clicked_cc(self._last_device)
+
     def _start_device(self, device):
+        self._last_device = device
+        self.pcastfailed = False
+        self.panel.retry.setEnabled(False)
         try:
-            import copy
-            args = copy.copy(self.settings.args)
+            args = self.panel.apply_args(self.settings.args)
             args.device_id = device.id
             args.name = None
             settings = mkchromecast.Mkchromecast(args)
+            settings.audio_source = self.panel.audio.currentData() if settings.platform == "Linux" else None
+            if settings.audio_source:
+                settings.adevice = None
             self._player.prepare(settings)
-        except Exception as exc:
-            self.show_error(str(exc))
+        except (Exception, SystemExit) as exc:
+            self.panel.retry.setEnabled(True)
+            self.show_error("Cannot start streaming: " + str(exc))
             return
         self.played = True
         self.stopped = False
         self.set_icon_working()
+        self.panel.set_running(True, "Connecting to " + device.name + "…")
         self._play_thread.start()
+
+    def connection_changed(self, connected):
+        if self._exiting:
+            return
+        self.panel.status.setText("Receiver connection restored. If playback does not resume, use Retry connection."
+                                  if connected else "Receiver connection lost. Check the network or use Retry connection.")
+        self.panel.retry.setEnabled(True)
 
     def pcastready(self, message):
         if message == "_play_cast_ success":
             self.cast = self._player.session.receiver.cast
             self.pcastfailed = False
+            source = self._player.session.settings.capture_device
+            self.panel.status.setText("Streaming — audio source: " + source)
             self.set_icon_idle()
         else:
             self.pcastfailed = True
             self.set_icon_nodev()
-            if not self._player.stop_requested:
+            if not self._player.stop_requested or message.startswith("Cleanup warning:"):
                 self.show_error(message)
 
     def _play_finished(self):
         self.cast = None
         self.played = False
         self.stopped = True
+        self.panel.set_running(False, None if self.pcastfailed else "Streaming stopped.")
+        self.panel.retry.setEnabled(self._last_device is not None)
         self.set_icon_idle()
         if self._pending_device is not None and not self._exiting:
             device, self._pending_device = self._pending_device, None
@@ -403,13 +449,14 @@ class menubar(QtWidgets.QMainWindow):
 
     def exit_all(self):
         self._exiting = True
+        self.panel.process.kill()
         self._pending_device = None
         self._player.stop()
         self._search.cancel.set()
         self._await_shutdown()
 
     def _await_shutdown(self):
-        if any(thread.isRunning() for thread in
+        if self.panel.process.state() != QtCore.QProcess.NotRunning or any(thread.isRunning() for thread in
                (self._play_thread, self._search_thread, self._updater_thread)):
             QtCore.QTimer.singleShot(100, self._await_shutdown)
         else:
@@ -424,6 +471,7 @@ def main(settings=None):
     settings = settings or mkchromecast.Mkchromecast()
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     window = menubar(settings)
+    window.show()
     signal.signal(signal.SIGINT, lambda *_: window.exit_all())
     signal.signal(signal.SIGTERM, lambda *_: window.exit_all())
     # Let Python service signals while Qt is idle.
