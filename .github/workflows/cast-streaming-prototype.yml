@@ -1,0 +1,31 @@
+name: Cast Streaming native prototype
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/cast-streaming-prototype]
+    paths: ['experimental/cast_streaming/**', '.github/workflows/cast-streaming-prototype.yml']
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Native dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libopus-dev libvpx-dev libsdl2-dev
+      - name: Build pinned Open Screen and run upstream tests
+        run: python experimental/cast_streaming/build.py "$RUNNER_TEMP/mkcast-native"
+      - name: Save native build metadata and binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cast-streaming-linux-prototype
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/mkcast-native/openscreen/out/mkcast/mkcast-build.json
+            ${{ runner.temp }}/mkcast-native/openscreen/out/mkcast/cast_sender
+            ${{ runner.temp }}/mkcast-native/openscreen/out/mkcast/cast_receiver
